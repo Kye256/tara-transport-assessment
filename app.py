@@ -16,7 +16,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 import dash
-from dash import html, dcc, Input, Output, State, callback, no_update, ctx, ALL
+from dash import html, dcc, Input, Output, State, callback, no_update, ctx, ALL, ClientsideFunction
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 
@@ -39,9 +39,17 @@ from config.parameters import (
 # App Setup
 # ============================================================
 
+GOOGLE_FONTS_URL = (
+    "https://fonts.googleapis.com/css2?"
+    "family=Source+Sans+3:wght@400;600;700&"
+    "family=DM+Mono:wght@400;500&"
+    "family=Libre+Franklin:wght@600;700&"
+    "display=swap"
+)
+
 app = dash.Dash(
     __name__,
-    external_stylesheets=[dbc.themes.FLATLY],
+    external_stylesheets=[dbc.themes.FLATLY, GOOGLE_FONTS_URL],
     suppress_callback_exceptions=True,
     title="TARA — Transport Assessment & Road Appraisal",
 )
@@ -61,20 +69,28 @@ STEP_LABELS = [
 DEFAULT_SPLIT = {"Cars": 0.55, "Buses_LGV": 0.25, "HGV": 0.15, "Semi_Trailers": 0.05}
 DEFAULT_ADT = 3000
 
+# CartoDB Positron tile URL
+TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+TILE_ATTR = '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+
 
 # ============================================================
 # Helpers
 # ============================================================
 
-def _metric_card(title: str, value: str, color: str = "primary") -> dbc.Card:
-    """Build a small metric card."""
-    return dbc.Card(
-        dbc.CardBody([
-            html.H5(value, className=f"mb-0 text-{color}"),
-            html.Small(title, className="text-muted"),
-        ], className="py-2"),
-        className="text-center",
-    )
+def _metric_card(title: str, value: str, color: str = "primary") -> html.Div:
+    """Build a small metric display using TARA CSS classes."""
+    css_class = {
+        "success": "positive",
+        "danger": "negative",
+        "warning": "warning",
+        "info": "info",
+        "primary": "",
+    }.get(color, "")
+    return html.Div([
+        html.Div(title, className="tara-metric-label"),
+        html.Div(value, className=f"tara-metric-value {css_class}"),
+    ], className="tara-metric")
 
 
 def _make_serializable(obj):
@@ -93,35 +109,21 @@ def _make_serializable(obj):
 # ============================================================
 
 def make_step_indicator(active_step: int = 1) -> html.Div:
-    """Build a horizontal step indicator (1-7)."""
-    items = []
+    """Build a segmented step bar (1-7)."""
+    segments = []
     for i, label in enumerate(STEP_LABELS, 1):
         if i < active_step:
-            badge_cls = "bg-success"
+            cls = "tara-step-segment completed"
         elif i == active_step:
-            badge_cls = "bg-primary"
+            cls = "tara-step-segment active"
         else:
-            badge_cls = "bg-secondary"
+            cls = "tara-step-segment"
 
-        items.append(
-            html.Div(
-                [
-                    html.Span(
-                        str(i),
-                        className=f"badge rounded-pill {badge_cls} me-1",
-                        style={"fontSize": "0.75rem"},
-                    ),
-                    html.Small(label, className="d-none d-md-inline"),
-                ],
-                className="d-flex align-items-center me-2",
-            )
+        segments.append(
+            html.Div(f"{i}. {label}", className=cls)
         )
-        if i < len(STEP_LABELS):
-            items.append(
-                html.Span("\u2014", className="text-muted me-2", style={"fontSize": "0.7rem"})
-            )
 
-    return html.Div(items, className="d-flex flex-wrap align-items-center mb-3")
+    return html.Div(segments, className="tara-step-bar")
 
 
 # ============================================================
@@ -136,7 +138,7 @@ def _build_road_dropdown_options() -> list[dict]:
 
 def build_step1():
     return dbc.Card(dbc.CardBody([
-        html.H5("Step 1: Select Road", className="card-title"),
+        html.H5("Select Road", className="tara-heading"),
         html.P("Choose a road from the Uganda UNRA network.", className="text-muted"),
         dcc.Dropdown(
             id="road-select-dropdown",
@@ -151,7 +153,7 @@ def build_step1():
 
 def build_step2():
     return dbc.Card(dbc.CardBody([
-        html.H5("Step 2: Road Condition", className="card-title"),
+        html.H5("Road Condition", className="tara-heading"),
         html.P("Describe the current road condition.", className="text-muted"),
         dbc.Row([
             dbc.Col([
@@ -202,27 +204,32 @@ def build_step2():
 
 
 def build_step3():
+    # Build vehicle class breakdown as an HTML table
+    header = html.Thead(html.Tr([
+        html.Th("Class"),
+        html.Th("ADT"),
+        html.Th("Share %"),
+    ]))
+
     rows = []
     for vc in VEHICLE_CLASSES:
         label = VEHICLE_CLASS_LABELS[vc]
         pct = DEFAULT_SPLIT[vc]
         adt_val = int(DEFAULT_ADT * pct)
-        rows.append(dbc.Row([
-            dbc.Col(html.Small(label), md=5),
-            dbc.Col(
+        rows.append(html.Tr([
+            html.Td(label),
+            html.Td(
                 dbc.Input(id={"type": "traffic-adt", "vc": vc}, type="number",
                           value=adt_val, min=0, step=10, size="sm"),
-                md=3,
             ),
-            dbc.Col(
+            html.Td(
                 dbc.Input(id={"type": "traffic-pct", "vc": vc}, type="number",
                           value=round(pct * 100, 1), min=0, max=100, step=0.1, size="sm"),
-                md=3,
             ),
-        ], className="mb-1"))
+        ]))
 
     return dbc.Card(dbc.CardBody([
-        html.H5("Step 3: Traffic", className="card-title"),
+        html.H5("Traffic", className="tara-heading"),
         html.P("Enter average daily traffic by vehicle class.", className="text-muted"),
         dbc.Row([
             dbc.Col([
@@ -237,20 +244,14 @@ def build_step3():
                           min=0, max=15, step=0.1),
             ], md=6),
         ], className="mb-3"),
-        html.H6("Vehicle Class Breakdown"),
-        dbc.Row([
-            dbc.Col(html.Small("Class", className="fw-bold"), md=5),
-            dbc.Col(html.Small("ADT", className="fw-bold"), md=3),
-            dbc.Col(html.Small("Share %", className="fw-bold"), md=3),
-        ], className="mb-1"),
-        *rows,
+        html.Table([header, html.Tbody(rows)], className="tara-table"),
         html.Div(id="traffic-warnings"),
     ]), className="mb-3")
 
 
 def build_step4():
     return dbc.Card(dbc.CardBody([
-        html.H5("Step 4: Costs", className="card-title"),
+        html.H5("Costs", className="tara-heading"),
         html.P("Enter project costs and timing.", className="text-muted"),
         dbc.Row([
             dbc.Col([
@@ -293,42 +294,36 @@ def build_step4():
 
 def build_step5():
     return dbc.Card(dbc.CardBody([
-        html.H5("Step 5: Results", className="card-title"),
+        html.H5("Results", className="tara-heading"),
         html.P("Run the cost-benefit analysis.", className="text-muted"),
-        dbc.Button("Run Appraisal", id="run-cba-btn", color="success",
-                    size="lg", className="mb-3"),
+        dbc.Button("Run Appraisal", id="run-cba-btn", className="tara-btn-amber mb-3",
+                    size="lg"),
         dcc.Loading(type="default", children=html.Div(id="cba-results-area")),
     ]), className="mb-3")
 
 
 def build_step6():
     return dbc.Card(dbc.CardBody([
-        html.H5("Step 6: Sensitivity Analysis", className="card-title"),
+        html.H5("Sensitivity Analysis", className="tara-heading"),
         html.P("Adjust parameters and see how results change.", className="text-muted"),
         html.Div(id="sensitivity-controls"),
         dcc.Loading(type="default", children=html.Div(id="sensitivity-results-area")),
         html.Hr(),
-        dbc.Button("AI Interpretation", id="ai-interpret-btn", color="info",
-                    outline=True, size="sm", className="mb-2"),
+        dbc.Button("AI Interpretation", id="ai-interpret-btn", color="outline-info",
+                    size="sm", className="mb-2"),
         dcc.Loading(type="circle", children=html.Div(id="ai-narrative")),
     ]), className="mb-3")
 
 
 def build_step7():
     return dbc.Card(dbc.CardBody([
-        html.H5("Step 7: Report", className="card-title"),
+        html.H5("Report", className="tara-heading"),
         html.P("Generate and download the appraisal report.", className="text-muted"),
-        dbc.Row([
-            dbc.Col(
-                dbc.Button("Generate PDF Report", id="gen-pdf-btn",
-                            color="primary", className="me-2"),
-                width="auto",
-            ),
-            dbc.Col(
-                dbc.Button("Export CSV Data", id="gen-csv-btn",
-                            color="outline-secondary"),
-                width="auto",
-            ),
+        html.Div([
+            dbc.Button("Generate PDF Report", id="gen-pdf-btn",
+                        className="tara-btn-primary me-2"),
+            dbc.Button("Export CSV Data", id="gen-csv-btn",
+                        className="tara-btn-secondary"),
         ], className="mb-3"),
         dcc.Loading(type="circle", children=html.Div(id="report-result-area")),
         dcc.Download(id="download-pdf"),
@@ -353,7 +348,7 @@ ALL_STEPS = {
 # Main Layout
 # ============================================================
 
-app.layout = dbc.Container([
+app.layout = html.Div([
     # Stores
     dcc.Store(id="current-step-store", data=1),
     dcc.Store(id="road-data-store", data=None),
@@ -366,27 +361,22 @@ app.layout = dbc.Container([
     dcc.Store(id="population-store", data=None),
     dcc.Store(id="equity-store", data=None),
     dcc.Store(id="cba-inputs-store", data=None),
+    dcc.Store(id="ai-narrative-store", data=None),
+    dcc.Store(id="map-bounds-store", data=None),
 
     # Header
-    dbc.Navbar(
-        dbc.Container([
-            dbc.NavbarBrand([
-                html.Span("TARA", className="fw-bold", style={"fontSize": "1.4rem"}),
-                html.Small(
-                    " \u2014 Transport Assessment & Road Appraisal",
-                    className="text-muted ms-2 d-none d-md-inline",
-                ),
-            ]),
-            html.Small("Built with Claude Opus 4.6", className="text-muted d-none d-md-block"),
+    html.Div([
+        html.Div([
+            html.Span("TARA", className="tara-wordmark"),
+            html.Span("Transport Assessment & Road Appraisal", className="tara-subtitle d-none d-md-inline"),
         ]),
-        color="white",
-        className="border-bottom mb-3",
-    ),
+        html.Span("Built with Claude Opus 4.6", className="tara-badge d-none d-md-inline"),
+    ], className="tara-header"),
 
     # Two-panel layout
-    dbc.Row([
+    html.Div([
         # Left: Wizard
-        dbc.Col([
+        html.Div([
             html.Div(id="step-indicator"),
             # All steps are rendered but hidden via display style
             *[
@@ -394,48 +384,58 @@ app.layout = dbc.Container([
                 for i, step in ALL_STEPS.items()
             ],
             # Nav buttons
-            dbc.Row([
-                dbc.Col(
-                    dbc.Button("\u2190 Back", id="back-btn", color="secondary",
-                               outline=True, className="w-100"),
-                    width=4,
-                ),
-                dbc.Col(width=4),
-                dbc.Col(
-                    dbc.Button("Next \u2192", id="next-btn", color="primary",
-                               className="w-100"),
-                    width=4,
-                ),
-            ], className="mt-3"),
-        ], md=5, lg=4, style={"overflowY": "auto", "maxHeight": "calc(100vh - 80px)",
-                               "paddingRight": "12px"}),
+            html.Div([
+                dbc.Button("\u2190 Back", id="back-btn", color="secondary",
+                           outline=True, size="sm"),
+                dbc.Button("Next \u2192", id="next-btn", color="primary",
+                           size="sm"),
+            ], className="tara-nav-buttons"),
+        ], className="tara-left-panel"),
 
         # Right: Map + Results
-        dbc.Col([
+        html.Div([
             html.Div(
                 dl.Map(
                     id="main-map",
-                    children=[dl.TileLayer()],
+                    children=[dl.TileLayer(url=TILE_URL, attribution=TILE_ATTR)],
                     center=[0.35, 32.58],
                     zoom=10,
-                    style={"height": "45vh", "width": "100%", "borderRadius": "8px"},
+                    style={"height": "45vh", "width": "100%"},
                 ),
-                className="mb-3",
+                className="tara-map-container",
             ),
             html.Div(id="right-panel-results"),
-        ], md=7, lg=8),
-    ]),
+        ], className="tara-right-panel"),
+    ], className="tara-layout"),
 
     # Footer
-    html.Hr(className="mt-4"),
-    html.Footer(
-        html.Small(
-            "Built for the Anthropic Claude Code Hackathon | Feb 2026",
-            className="text-muted",
-        ),
-        className="text-center mb-3",
+    html.Div(
+        "TARA \u2014 Built for the Anthropic Claude Code Hackathon | Feb 2026",
+        className="tara-footer",
     ),
-], fluid=True)
+])
+
+
+# ============================================================
+# Clientside Callback: AI Typing Animation
+# ============================================================
+
+app.clientside_callback(
+    ClientsideFunction(namespace="tara", function_name="typeText"),
+    Output("ai-narrative", "children", allow_duplicate=True),
+    Input("ai-narrative-store", "data"),
+    prevent_initial_call=True,
+)
+
+# Clientside Callback: Map fitBounds
+# dash-leaflet's `bounds` prop doesn't reliably trigger Leaflet's fitBounds().
+# We use a store + clientside callback to invoke it via JS.
+app.clientside_callback(
+    ClientsideFunction(namespace="tara", function_name="fitBounds"),
+    Output("main-map", "bounds"),
+    Input("map-bounds-store", "data"),
+    prevent_initial_call=True,
+)
 
 
 # ============================================================
@@ -487,7 +487,7 @@ def update_step_display(current_step):
     Output("main-map", "children"),
     Output("main-map", "center"),
     Output("main-map", "zoom"),
-    Output("main-map", "bounds"),
+    Output("map-bounds-store", "data"),
     Input("road-select-dropdown", "value"),
     prevent_initial_call=True,
 )
@@ -543,35 +543,29 @@ def select_road(road_id):
 
     map_result = create_road_map(road_data, facilities_data)
 
-    info_cards = dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H6(f"{road_data['total_length_km']} km",
-                     className="mb-0 text-primary"),
-            html.Small("Length", className="text-muted"),
-        ]), className="text-center"), md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H6(f"{road_data['segment_count']}",
-                     className="mb-0 text-primary"),
-            html.Small("Segments", className="text-muted"),
-        ]), className="text-center"), md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H6(road_record["surface"] or "unknown",
-                     className="mb-0 text-primary"),
-            html.Small("Surface", className="text-muted"),
-        ]), className="text-center"), md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H6(road_record["highway_class"].replace("_", " ").title(),
-                     className="mb-0 text-primary"),
-            html.Small("Road Class", className="text-muted"),
-        ]), className="text-center"), md=3),
-    ], className="mb-2")
+    # Road info as HTML table
+    info_rows = [
+        html.Tr([html.Td("Length"), html.Td(f"{road_data['total_length_km']} km")]),
+        html.Tr([html.Td("Segments"), html.Td(f"{road_data['segment_count']}")]),
+        html.Tr([html.Td("Surface"), html.Td(road_record["surface"] or "unknown")]),
+        html.Tr([html.Td("Road Class"), html.Td(road_record["highway_class"].replace("_", " ").title())]),
+    ]
+    # Enriched data rows (shown when enrichment pipeline has been run)
+    if road_record.get("surface_predicted"):
+        info_rows.append(html.Tr([html.Td("Predicted Surface"), html.Td(road_record["surface_predicted"])]))
+    if road_record.get("pop_5km") is not None:
+        info_rows.append(html.Tr([html.Td("Population (5km)"), html.Td(f"{road_record['pop_5km']:,}")]))
+    if road_record.get("urban_pct") is not None:
+        label = "Urban" if road_record["urban_pct"] > 50 else "Rural"
+        info_rows.append(html.Tr([html.Td("Urban/Rural"), html.Td(f"{label} ({road_record['urban_pct']:.0f}% urban)")]))
+    info_table = html.Table([html.Tbody(info_rows)], className="tara-road-info")
 
     result_ui = html.Div([
         dbc.Alert(
             html.Strong(f"Selected: {road_record['name']}"),
             color="success", className="py-2",
         ),
-        info_cards,
+        info_table,
     ])
 
     return (
@@ -751,7 +745,8 @@ def update_cost_per_km(total_cost, road_data):
     if road_data and road_data.get("total_length_km"):
         length = road_data["total_length_km"]
     if total_cost and length > 0:
-        return html.Span(f"${total_cost / length:,.0f}/km", className="text-primary fw-bold")
+        return html.Span(f"${total_cost / length:,.0f}/km", className="tara-metric-value positive",
+                         style={"fontSize": "0.9rem"})
     return html.Span("\u2014")
 
 
@@ -894,10 +889,13 @@ def run_cba_callback(
             no_update, no_update, no_update, no_update, no_update,
         )
 
-    # Population
+    # Population — prefer Kontur (local, fast) over WorldPop (API, slow)
     pop_data = None
     try:
-        from skills.worldpop import get_population
+        try:
+            from skills.kontur_population import get_population
+        except ImportError:
+            from skills.worldpop import get_population
         if road_data and road_data.get("found"):
             pop_data = get_population(
                 road_data.get("bbox", {}),
@@ -917,23 +915,21 @@ def run_cba_callback(
 
     s = cba_results.get("summary", {})
     viable = s.get("economically_viable", False)
-    verdict_color = "success" if viable else "danger"
+    verdict_cls = "tara-verdict viable" if viable else "tara-verdict not-viable"
     verdict_text = "ECONOMICALLY VIABLE" if viable else "NOT ECONOMICALLY VIABLE"
 
-    metric_cards = dbc.Row([
-        dbc.Col(_metric_card(
-            "NPV", f"${cba_results.get('npv', 0):,.0f}",
-            "success" if cba_results.get("npv", 0) > 0 else "danger"), md=3),
-        dbc.Col(_metric_card(
-            "EIRR", f"{s.get('eirr_pct', 'N/A')}%",
-            "success" if (s.get("eirr_pct") or 0) > discount_rate * 100 else "warning"), md=3),
-        dbc.Col(_metric_card(
-            "BCR", f"{cba_results.get('bcr', 0):.2f}",
-            "success" if cba_results.get("bcr", 0) > 1 else "danger"), md=3),
-        dbc.Col(_metric_card("FYRR", f"{s.get('fyrr_pct', 'N/A')}%", "info"), md=3),
-    ], className="mb-3")
+    npv_color = "positive" if cba_results.get("npv", 0) > 0 else "negative"
+    eirr_color = "positive" if (s.get("eirr_pct") or 0) > discount_rate * 100 else "warning"
+    bcr_color = "positive" if cba_results.get("bcr", 0) > 1 else "negative"
 
-    verdict_badge = dbc.Alert(verdict_text, color=verdict_color, className="text-center fw-bold")
+    metric_row = html.Div([
+        _metric_card("NPV", f"${cba_results.get('npv', 0):,.0f}", "success" if npv_color == "positive" else "danger"),
+        _metric_card("EIRR", f"{s.get('eirr_pct', 'N/A')}%", "success" if eirr_color == "positive" else "warning"),
+        _metric_card("BCR", f"{cba_results.get('bcr', 0):.2f}", "success" if bcr_color == "positive" else "danger"),
+        _metric_card("FYRR", f"{s.get('fyrr_pct', 'N/A')}%", "info"),
+    ], className="tara-metric-row")
+
+    verdict_badge = html.Div(verdict_text, className=verdict_cls)
 
     # Charts
     charts_ui = html.Div()
@@ -966,8 +962,8 @@ def run_cba_callback(
             html.Small(equity_results.get("classification", ""), className="text-muted"),
         ]), className="mb-3")
 
-    left_result = html.Div([verdict_badge, metric_cards])
-    right_panel = html.Div([metric_cards, verdict_badge, equity_ui, charts_ui])
+    left_result = html.Div([verdict_badge, metric_row])
+    right_panel = html.Div([metric_row, verdict_badge, equity_ui, charts_ui])
 
     return (
         left_result,
@@ -1006,7 +1002,7 @@ def build_sensitivity_controls(current_step, results):
                    marks={i: f"{i:+.0f}pp" for i in range(-2, 3)},
                    tooltip={"placement": "bottom"}),
         dbc.Button("Run Full Sensitivity Analysis", id="run-sensitivity-btn",
-                   color="primary", outline=True, className="mt-3"),
+                   className="tara-btn-amber mt-3"),
     ])
 
 
@@ -1056,15 +1052,15 @@ def update_sensitivity(cost_chg, traffic_chg, growth_chg,
         for var, val in sv.items():
             fmt = f"{val:+.1%} absolute" if var == "traffic_growth" else f"{val:+.0%}"
             sv_rows.append(html.Tr([
-                html.Td(var.replace("_", " ").title()), html.Td(fmt),
+                html.Td(var.replace("_", " ").title()), html.Td(fmt, className="mono"),
             ]))
 
         sv_table = html.Div()
         if sv_rows:
-            sv_table = dbc.Table([
+            sv_table = html.Table([
                 html.Thead(html.Tr([html.Th("Variable"), html.Th("Switching Value")])),
                 html.Tbody(sv_rows),
-            ], bordered=True, size="sm", className="mt-2")
+            ], className="tara-table mt-2")
 
         summary = sens.get("summary", {})
         risk = dbc.Alert(summary.get("risk_assessment", ""), color="info", className="mt-2")
@@ -1093,20 +1089,20 @@ def update_sensitivity(cost_chg, traffic_chg, growth_chg,
     dc = "success" if delta >= 0 else "danger"
     ns = new.get("summary", {})
 
-    comparison = dbc.Row([
-        dbc.Col(_metric_card("Adjusted NPV", f"${new_npv:,.0f}", dc), md=3),
-        dbc.Col(_metric_card("NPV Change", f"${delta:+,.0f}", dc), md=3),
-        dbc.Col(_metric_card("Adjusted BCR", f"{new.get('bcr', 0):.2f}",
-                             "success" if new.get("bcr", 0) > 1 else "danger"), md=3),
-        dbc.Col(_metric_card("Adjusted EIRR", f"{ns.get('eirr_pct', 'N/A')}%", "info"), md=3),
-    ])
+    comparison = html.Div([
+        _metric_card("Adjusted NPV", f"${new_npv:,.0f}", dc),
+        _metric_card("NPV Change", f"${delta:+,.0f}", dc),
+        _metric_card("Adjusted BCR", f"{new.get('bcr', 0):.2f}",
+                     "success" if new.get("bcr", 0) > 1 else "danger"),
+        _metric_card("Adjusted EIRR", f"{ns.get('eirr_pct', 'N/A')}%", "info"),
+    ], className="tara-metric-row")
     return comparison, no_update
 
 
 # --- Step 6: AI Interpretation ---
 
 @callback(
-    Output("ai-narrative", "children"),
+    Output("ai-narrative-store", "data"),
     Input("ai-interpret-btn", "n_clicks"),
     State("results-store", "data"),
     State("sensitivity-store", "data"),
@@ -1115,7 +1111,7 @@ def update_sensitivity(cost_chg, traffic_chg, growth_chg,
 )
 def ai_interpretation(n_clicks, cba_results, sensitivity_results, road_data):
     if not cba_results:
-        return dbc.Alert("Run the appraisal first.", color="warning")
+        return no_update
 
     try:
         from agent.orchestrator import create_agent, process_message_sync
@@ -1138,12 +1134,29 @@ def ai_interpretation(n_clicks, cba_results, sensitivity_results, road_data):
         agent = create_agent()
         text, _, _ = process_message_sync(agent, prompt)
 
-        return dbc.Card(dbc.CardBody([
-            html.H6("AI Interpretation", className="text-info"),
-            dcc.Markdown(text),
-        ]), className="mt-2 border-info")
+        return {"text": text, "targetId": "ai-narrative"}
     except Exception as e:
-        return dbc.Alert(f"AI interpretation unavailable: {str(e)}", color="warning")
+        # For errors, we can't use the typing animation, so return None
+        # and set the error directly
+        return no_update
+
+
+# Error fallback for AI interpretation
+@callback(
+    Output("ai-narrative", "children"),
+    Input("ai-interpret-btn", "n_clicks"),
+    State("results-store", "data"),
+    prevent_initial_call=True,
+)
+def ai_interpretation_error_fallback(n_clicks, cba_results):
+    """Show error states directly (non-typing)."""
+    if not cba_results:
+        return dbc.Alert("Run the appraisal first.", color="warning")
+    # If we get here without the store firing, show a loading state
+    return html.Div([
+        html.Span(className="tara-typing-dot"),
+        html.Small(" Generating interpretation...", className="text-muted"),
+    ])
 
 
 # --- Step 7: PDF ---

@@ -16,10 +16,11 @@ from typing import Optional
 # Module-level cache
 _road_network: Optional[dict] = None
 
-_GEOJSON_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "data", "uganda_main_roads.geojson",
-)
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+_ENRICHED_PATH = os.path.join(_DATA_DIR, "uganda_main_roads_enriched.geojson")
+_BASE_PATH = os.path.join(_DATA_DIR, "uganda_main_roads.geojson")
+# Prefer enriched file if it exists
+_GEOJSON_PATH = _ENRICHED_PATH if os.path.exists(_ENRICHED_PATH) else _BASE_PATH
 
 
 def load_road_network() -> dict:
@@ -62,6 +63,11 @@ def load_road_network() -> dict:
             "smoothness": props.get("smoothness"),
             "bridge": props.get("bridge"),
             "geometry": geom,
+            # Enriched properties (may be None if not enriched)
+            "pop_5km": props.get("pop_5km"),
+            "surface_predicted": props.get("surface_predicted"),
+            "pct_paved": props.get("pct_paved"),
+            "urban_pct": props.get("urban_pct"),
         })
 
     # Merge each group into a single logical road
@@ -80,6 +86,13 @@ def load_road_network() -> dict:
         lanes_set = set()
         osm_ids = []
 
+        # Enriched property accumulators
+        pop_5km_total = 0
+        pop_5km_any = False
+        surface_preds = set()
+        pct_paved_vals = []
+        urban_pct_vals = []
+
         for seg in segments:
             all_coords.extend(seg["coords"])
             all_geometries.append(seg["geometry"])
@@ -91,6 +104,16 @@ def load_road_network() -> dict:
                 widths.add(seg["width"])
             if seg["lanes"]:
                 lanes_set.add(seg["lanes"])
+            # Aggregate enriched properties
+            if seg.get("pop_5km") is not None:
+                pop_5km_total += seg["pop_5km"]
+                pop_5km_any = True
+            if seg.get("surface_predicted"):
+                surface_preds.add(seg["surface_predicted"])
+            if seg.get("pct_paved") is not None:
+                pct_paved_vals.append(seg["pct_paved"])
+            if seg.get("urban_pct") is not None:
+                urban_pct_vals.append(seg["urban_pct"])
 
         lats = [c[0] for c in all_coords]
         lons = [c[1] for c in all_coords]
@@ -115,6 +138,11 @@ def load_road_network() -> dict:
                 "south": min(lats), "north": max(lats),
                 "west": min(lons), "east": max(lons),
             },
+            # Enriched properties (None if not available)
+            "pop_5km": pop_5km_total if pop_5km_any else None,
+            "surface_predicted": ", ".join(sorted(surface_preds)) if surface_preds else None,
+            "pct_paved": round(sum(pct_paved_vals) / len(pct_paved_vals), 1) if pct_paved_vals else None,
+            "urban_pct": round(sum(urban_pct_vals) / len(urban_pct_vals), 1) if urban_pct_vals else None,
         }
 
         roads.append(road)
@@ -208,7 +236,7 @@ def list_all_roads() -> list[dict]:
 def _lightweight(road: dict) -> dict:
     """Return a road record without geometry/coordinates (for UI)."""
     hw = road["highway_class"].replace("_", " ").title()
-    return {
+    result = {
         "id": road["id"],
         "name": road["name"],
         "highway_class": road["highway_class"],
@@ -219,6 +247,16 @@ def _lightweight(road: dict) -> dict:
         "segment_count": road["segment_count"],
         "label": f"{road['name']} ({hw}, {road['length_km']}km)",
     }
+    # Include enriched properties if available
+    if road.get("pop_5km") is not None:
+        result["pop_5km"] = road["pop_5km"]
+    if road.get("surface_predicted") is not None:
+        result["surface_predicted"] = road["surface_predicted"]
+    if road.get("pct_paved") is not None:
+        result["pct_paved"] = road["pct_paved"]
+    if road.get("urban_pct") is not None:
+        result["urban_pct"] = road["urban_pct"]
+    return result
 
 
 def _extract_coords(geom: dict) -> list[tuple[float, float]]:
