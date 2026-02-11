@@ -1,0 +1,36 @@
+# TARA: Transport Assessment & Road Appraisal
+# Dependencies
+
+# Web UI
+streamlit>=1.30.0
+streamlit-folium>=0.18.0
+
+# AI Agent
+anthropic>=0.40.0
+
+# Data & Analysis
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Maps
+folium>=0.15.0
+geopy>=2.4.0
+
+# Charts
+plotly>=5.18.0
+matplotlib>=3.8.0
+
+# HTTP & APIs
+requests>=2.31.0
+httpx>=0.25.0
+
+# Video processing
+opencv-python-headless>=4.8.0
+
+# Report generation
+fpdf2>=2.7.0
+python-docx>=1.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+Pillow>=10.0.0
