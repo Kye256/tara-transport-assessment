@@ -14,6 +14,10 @@ from skills.osm_facilities import FACILITY_CATEGORIES
 UGANDA_CENTER = [0.35, 32.58]
 DEFAULT_ZOOM = 10
 
+# CartoDB Positron — clean, muted basemap for analytical overlays
+TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+TILE_ATTR = '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+
 
 def create_road_map(
     road_data: dict,
@@ -33,7 +37,7 @@ def create_road_map(
     """
     if not road_data.get("found") or not road_data.get("center"):
         return {
-            "children": [dl.TileLayer()],
+            "children": [dl.TileLayer(url=TILE_URL, attribution=TILE_ATTR)],
             "center": UGANDA_CENTER,
             "zoom": DEFAULT_ZOOM,
             "bounds": None,
@@ -42,7 +46,7 @@ def create_road_map(
     center = road_data["center"]
     map_center = [center["lat"], center["lon"]]
 
-    children = [dl.TileLayer()]
+    children = [dl.TileLayer(url=TILE_URL, attribution=TILE_ATTR)]
 
     # Add road segments
     road_layers = _build_road_segments(road_data, condition_data)
@@ -125,17 +129,17 @@ def _build_road_segments(
 
 
 def _build_facilities(facilities_data: dict) -> list:
-    """Build dash-leaflet Marker components for facilities."""
+    """Build dash-leaflet CircleMarker components for facilities."""
     layers = []
 
-    # Color mapping for marker icons
+    # TARA palette for facility categories
     color_map = {
-        "red": "#e74c3c",
-        "blue": "#3498db",
-        "green": "#2ecc71",
-        "cyan": "#1abc9c",
-        "orange": "#e67e22",
-        "purple": "#9b59b6",
+        "red": "#a83a2f",
+        "blue": "#2a6496",
+        "green": "#2d5f4a",
+        "cyan": "#3d8b6e",
+        "orange": "#d4920b",
+        "purple": "#6b3f7a",
     }
 
     for category, items in facilities_data.get("facilities", {}).items():
@@ -145,7 +149,8 @@ def _build_facilities(facilities_data: dict) -> list:
         cat_info = FACILITY_CATEGORIES.get(category, {})
         icon_char = cat_info.get("icon", "")
         color = cat_info.get("color", "gray")
-        marker_color = color_map.get(color, "#95a5a6")
+        marker_color = color_map.get(color, "#607d8b")
+        letter = category[0].upper() if category else "?"
 
         for facility in items:
             popup_html = (
@@ -155,7 +160,7 @@ def _build_facilities(facilities_data: dict) -> list:
             if facility.get("distance_to_road_km"):
                 popup_html += f"<br>Distance to road: {facility['distance_to_road_km']} km"
 
-            tooltip_text = facility.get("name", category.title())
+            tooltip_text = f"[{letter}] {facility.get('name', category.title())}"
 
             layers.append(
                 dl.CircleMarker(
@@ -197,7 +202,7 @@ def _build_endpoint_markers(road_data: dict) -> list:
             radius=10,
             color="white",
             weight=3,
-            fillColor="#27ae60",
+            fillColor="#2d5f4a",
             fillOpacity=1,
             children=[dl.Tooltip("Start of road (A)")],
         ),
@@ -206,7 +211,7 @@ def _build_endpoint_markers(road_data: dict) -> list:
             radius=10,
             color="white",
             weight=3,
-            fillColor="#e74c3c",
+            fillColor="#a83a2f",
             fillOpacity=1,
             children=[dl.Tooltip("End of road (B)")],
         ),
@@ -216,29 +221,29 @@ def _build_endpoint_markers(road_data: dict) -> list:
 def _surface_color(surface: str) -> str:
     """Color-code road segments by surface type."""
     surface_colors = {
-        "asphalt": "#2196F3",
-        "paved": "#2196F3",
-        "concrete": "#1565C0",
-        "gravel": "#FF9800",
-        "unpaved": "#FF9800",
-        "compacted": "#FFC107",
-        "dirt": "#795548",
-        "earth": "#795548",
-        "sand": "#FFEB3B",
-        "ground": "#8D6E63",
+        "asphalt": "#2d5f4a",
+        "paved": "#2d5f4a",
+        "concrete": "#1a3a2a",
+        "gravel": "#9a6b2f",
+        "unpaved": "#9a6b2f",
+        "compacted": "#d4920b",
+        "dirt": "#a83a2f",
+        "earth": "#a83a2f",
+        "sand": "#d4920b",
+        "ground": "#9a6b2f",
     }
-    return surface_colors.get(surface.lower(), "#9E9E9E")
+    return surface_colors.get(surface.lower(), "#607d8b")
 
 
 def _condition_color(condition_score: float) -> str:
     """Color-code by condition score (0-100, higher = better)."""
     if condition_score >= 80:
-        return "#4CAF50"
+        return "#2d5f4a"
     elif condition_score >= 60:
-        return "#8BC34A"
+        return "#3d8b6e"
     elif condition_score >= 40:
-        return "#FFC107"
+        return "#d4920b"
     elif condition_score >= 20:
-        return "#FF9800"
+        return "#9a6b2f"
     else:
-        return "#F44336"
+        return "#a83a2f"

@@ -18,6 +18,7 @@ data/*.shx
 data/*.dbf
 data/*.prj
 data/*.cpg
+data/*.gpkg
 
 # IDE
 .vscode/

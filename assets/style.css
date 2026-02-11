@@ -1,0 +1,584 @@
+/* ============================================================
+   TARA — Transport Assessment & Road Appraisal
+   Design System: "World Bank report meets modern analytics"
+   ============================================================ */
+
+/* --- Google Fonts --- */
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=DM+Mono:wght@400;500&family=Libre+Franklin:wght@600;700&display=swap');
+
+/* --- Custom Properties --- */
+:root {
+    /* Greens */
+    --tara-green-900: #1a3a2a;
+    --tara-green-700: #2d5f4a;
+    --tara-green-500: #3d8b6e;
+    --tara-green-300: #6fb89a;
+    --tara-green-100: #e0f0e8;
+    /* Neutrals */
+    --tara-slate-900: #1e2a32;
+    --tara-slate-700: #37474f;
+    --tara-slate-500: #607d8b;
+    --tara-slate-300: #b0bec5;
+    --tara-slate-100: #eceff1;
+    --tara-white: #ffffff;
+    /* Accents */
+    --tara-amber: #d4920b;
+    --tara-amber-light: #fff3cd;
+    --tara-red: #a83a2f;
+    --tara-red-light: #fce4e4;
+    --tara-blue: #2a6496;
+    --tara-blue-light: #e0ecf5;
+    --tara-earth: #9a6b2f;
+    /* Typography */
+    --font-body: 'Source Sans 3', 'Source Sans Pro', -apple-system, sans-serif;
+    --font-heading: 'Libre Franklin', 'Source Sans 3', sans-serif;
+    --font-mono: 'DM Mono', 'SF Mono', 'Consolas', monospace;
+    /* Spacing / Radius */
+    --radius-sm: 3px;
+    --radius-md: 6px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.10);
+}
+
+/* --- Base --- */
+body {
+    font-family: var(--font-body);
+    color: var(--tara-slate-900);
+    background: var(--tara-slate-100);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* --- Header Bar --- */
+.tara-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 24px;
+    background: var(--tara-green-900);
+    border-bottom: 3px solid var(--tara-green-500);
+    margin-bottom: 0;
+}
+
+.tara-wordmark {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 1.35rem;
+    color: var(--tara-white);
+    letter-spacing: 0.04em;
+}
+
+.tara-subtitle {
+    font-size: 0.82rem;
+    color: var(--tara-green-300);
+    margin-left: 12px;
+    font-weight: 400;
+}
+
+.tara-badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--tara-green-300);
+    border: 1px solid var(--tara-green-700);
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+    letter-spacing: 0.02em;
+}
+
+/* --- Two-Panel Layout --- */
+.tara-layout {
+    display: flex;
+    min-height: calc(100vh - 56px);
+    gap: 0;
+}
+
+.tara-left-panel {
+    width: 380px;
+    min-width: 380px;
+    max-width: 380px;
+    background: var(--tara-white);
+    border-right: 1px solid var(--tara-slate-300);
+    overflow-y: auto;
+    padding: 16px 20px;
+    max-height: calc(100vh - 56px);
+}
+
+.tara-right-panel {
+    flex: 1;
+    padding: 16px 20px;
+    overflow-y: auto;
+    max-height: calc(100vh - 56px);
+    background: var(--tara-slate-100);
+}
+
+/* --- Step Navigation Bar --- */
+.tara-step-bar {
+    display: flex;
+    border: 1px solid var(--tara-slate-300);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    margin-bottom: 16px;
+    background: var(--tara-slate-100);
+}
+
+.tara-step-segment {
+    flex: 1;
+    text-align: center;
+    padding: 6px 2px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--tara-slate-500);
+    border-right: 1px solid var(--tara-slate-300);
+    cursor: default;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.01em;
+}
+
+.tara-step-segment:last-child {
+    border-right: none;
+}
+
+.tara-step-segment.active {
+    background: var(--tara-green-700);
+    color: var(--tara-white);
+}
+
+.tara-step-segment.completed {
+    background: var(--tara-green-100);
+    color: var(--tara-green-700);
+}
+
+/* --- Headings --- */
+.tara-heading {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--tara-slate-900);
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+}
+
+/* --- Data Tables --- */
+.tara-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    margin-bottom: 12px;
+}
+
+.tara-table th {
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--tara-slate-500);
+    border-bottom: 2px solid var(--tara-slate-300);
+    padding: 6px 8px;
+    text-align: left;
+}
+
+.tara-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--tara-slate-100);
+    vertical-align: middle;
+}
+
+.tara-table .mono {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+/* --- Metric Displays --- */
+.tara-metric-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.tara-metric {
+    flex: 1;
+    min-width: 80px;
+    background: var(--tara-white);
+    border: 1px solid var(--tara-slate-300);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+}
+
+.tara-metric-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--tara-slate-500);
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.tara-metric-value {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 1.15rem;
+    color: var(--tara-slate-900);
+}
+
+.tara-metric-value.positive { color: var(--tara-green-700); }
+.tara-metric-value.negative { color: var(--tara-red); }
+.tara-metric-value.warning  { color: var(--tara-amber); }
+.tara-metric-value.info     { color: var(--tara-blue); }
+
+/* --- Buttons --- */
+.tara-btn-primary {
+    background: var(--tara-green-700);
+    color: var(--tara-white);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 8px 20px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.tara-btn-primary:hover {
+    background: var(--tara-green-900);
+}
+
+.tara-btn-secondary {
+    background: transparent;
+    color: var(--tara-slate-700);
+    border: 1px solid var(--tara-slate-300);
+    border-radius: var(--radius-sm);
+    padding: 8px 20px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.tara-btn-secondary:hover {
+    border-color: var(--tara-slate-500);
+    background: var(--tara-slate-100);
+}
+
+.tara-btn-amber {
+    background: var(--tara-amber);
+    color: var(--tara-white);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 8px 20px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.tara-btn-amber:hover {
+    background: #b87d08;
+}
+
+/* --- Bootstrap Overrides --- */
+.form-control, .form-select, select.form-select {
+    border-radius: var(--radius-sm) !important;
+    border-color: var(--tara-slate-300) !important;
+    font-size: 0.85rem !important;
+    padding: 6px 10px !important;
+}
+
+.form-control:focus, .form-select:focus {
+    border-color: var(--tara-green-500) !important;
+    box-shadow: 0 0 0 2px rgba(61,139,110,0.15) !important;
+}
+
+.card {
+    border-radius: var(--radius-sm) !important;
+    border: 1px solid var(--tara-slate-300) !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+
+.card-body {
+    padding: 14px 16px !important;
+}
+
+.alert {
+    border-radius: var(--radius-sm) !important;
+    font-size: 0.85rem !important;
+    padding: 8px 14px !important;
+    border: none !important;
+}
+
+.alert-success {
+    background: var(--tara-green-100) !important;
+    color: var(--tara-green-900) !important;
+    border-left: 3px solid var(--tara-green-700) !important;
+}
+
+.alert-danger {
+    background: var(--tara-red-light) !important;
+    color: var(--tara-red) !important;
+    border-left: 3px solid var(--tara-red) !important;
+}
+
+.alert-warning {
+    background: var(--tara-amber-light) !important;
+    color: #6d4c00 !important;
+    border-left: 3px solid var(--tara-amber) !important;
+}
+
+.alert-info {
+    background: var(--tara-blue-light) !important;
+    color: var(--tara-blue) !important;
+    border-left: 3px solid var(--tara-blue) !important;
+}
+
+.btn-primary, .btn-success {
+    background-color: var(--tara-green-700) !important;
+    border-color: var(--tara-green-700) !important;
+    border-radius: var(--radius-sm) !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+}
+
+.btn-primary:hover, .btn-success:hover {
+    background-color: var(--tara-green-900) !important;
+    border-color: var(--tara-green-900) !important;
+}
+
+.btn-secondary {
+    border-radius: var(--radius-sm) !important;
+    font-size: 0.85rem !important;
+}
+
+.btn-outline-secondary {
+    border-radius: var(--radius-sm) !important;
+    font-size: 0.85rem !important;
+    border-color: var(--tara-slate-300) !important;
+    color: var(--tara-slate-700) !important;
+}
+
+.btn-outline-info {
+    border-radius: var(--radius-sm) !important;
+    border-color: var(--tara-blue) !important;
+    color: var(--tara-blue) !important;
+}
+
+.btn-outline-info:hover {
+    background: var(--tara-blue) !important;
+    color: var(--tara-white) !important;
+}
+
+/* Kill rounded-pills */
+.badge.rounded-pill, .rounded-pill {
+    border-radius: var(--radius-sm) !important;
+}
+
+/* Progress bar */
+.progress {
+    border-radius: var(--radius-sm) !important;
+}
+
+.progress-bar {
+    background-color: var(--tara-green-700) !important;
+}
+
+/* --- AI Typing Animation --- */
+.tara-ai-block {
+    border-left: 3px solid var(--tara-green-500);
+    padding: 12px 16px;
+    background: var(--tara-green-100);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    font-size: 0.85rem;
+    line-height: 1.65;
+    color: var(--tara-slate-900);
+    margin-top: 8px;
+}
+
+.tara-ai-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: var(--tara-green-700);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: tara-blink 0.7s step-end infinite;
+}
+
+@keyframes tara-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+.tara-typing-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--tara-green-500);
+    margin-right: 6px;
+    vertical-align: middle;
+    animation: tara-pulse 1.2s ease-in-out infinite;
+}
+
+.tara-typing-dot.dim {
+    animation: none;
+    background: var(--tara-slate-300);
+}
+
+@keyframes tara-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* --- Map Container --- */
+.tara-map-container {
+    border: 1px solid var(--tara-slate-300);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 16px;
+}
+
+.tara-map-container .leaflet-container {
+    border-radius: var(--radius-sm);
+}
+
+/* --- Slider Overrides (Dash RangeSlider / Slider) --- */
+.rc-slider-track {
+    background-color: var(--tara-green-500) !important;
+}
+
+.rc-slider-handle {
+    border-color: var(--tara-green-700) !important;
+}
+
+.rc-slider-handle:hover, .rc-slider-handle:active {
+    border-color: var(--tara-green-500) !important;
+    box-shadow: 0 0 0 4px rgba(61,139,110,0.2) !important;
+}
+
+.rc-slider-dot-active {
+    border-color: var(--tara-green-500) !important;
+}
+
+/* --- Left Panel Scrollbar --- */
+.tara-left-panel::-webkit-scrollbar {
+    width: 5px;
+}
+
+.tara-left-panel::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.tara-left-panel::-webkit-scrollbar-thumb {
+    background: var(--tara-slate-300);
+    border-radius: 3px;
+}
+
+.tara-left-panel::-webkit-scrollbar-thumb:hover {
+    background: var(--tara-slate-500);
+}
+
+/* Firefox */
+.tara-left-panel {
+    scrollbar-width: thin;
+    scrollbar-color: var(--tara-slate-300) transparent;
+}
+
+/* --- Footer --- */
+.tara-footer {
+    text-align: center;
+    padding: 10px 24px;
+    font-size: 0.75rem;
+    color: var(--tara-slate-500);
+    border-top: 1px solid var(--tara-slate-300);
+    background: var(--tara-white);
+}
+
+/* --- Road Info Table (Step 1) --- */
+.tara-road-info {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+
+.tara-road-info td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--tara-slate-100);
+}
+
+.tara-road-info td:first-child {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--tara-slate-500);
+    font-weight: 600;
+    width: 35%;
+}
+
+.tara-road-info td:last-child {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--tara-slate-900);
+}
+
+/* --- Dropdown styling --- */
+.Select-control {
+    border-radius: var(--radius-sm) !important;
+}
+
+/* --- Verdict badge --- */
+.tara-verdict {
+    text-align: center;
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 0.9rem;
+    letter-spacing: 0.04em;
+    padding: 10px 16px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 12px;
+}
+
+.tara-verdict.viable {
+    background: var(--tara-green-100);
+    color: var(--tara-green-700);
+    border: 1px solid var(--tara-green-300);
+}
+
+.tara-verdict.not-viable {
+    background: var(--tara-red-light);
+    color: var(--tara-red);
+    border: 1px solid var(--tara-red);
+}
+
+/* --- Misc --- */
+.text-muted {
+    color: var(--tara-slate-500) !important;
+}
+
+label, .form-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--tara-slate-700);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 3px;
+}
+
+hr {
+    border-color: var(--tara-slate-100);
+    opacity: 1;
+}
+
+/* Nav buttons container */
+.tara-nav-buttons {
+    display: flex;
+    justify-content: space-between;
+    padding-top: 12px;
+    border-top: 1px solid var(--tara-slate-100);
+    margin-top: 12px;
+}
