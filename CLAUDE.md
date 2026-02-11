@@ -33,10 +33,10 @@ Kasangati-Matugga road, Wakiso District, Uganda (part of Kira-Kasangati-Matugga 
 - [x] Map display (Folium)
 - [x] Streamlit chat interface
 - [x] Uganda default parameters
-- [ ] Agent orchestrator (Opus 4.6 tool_use)
-- [ ] CBA calculation engine
-- [ ] Traffic forecasting
-- [ ] Sensitivity analysis
+- [x] Agent orchestrator (Opus 4.6 tool_use)
+- [x] CBA calculation engine
+- [x] Traffic forecasting
+- [x] Sensitivity analysis
 - [ ] Dashcam video analysis
 - [ ] Equity scoring
 - [ ] Report generation

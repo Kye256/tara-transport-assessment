@@ -16,6 +16,12 @@ from output.maps import create_road_map
 
 load_dotenv()
 
+# Check if agent mode is enabled (default: True)
+USE_AGENT = os.environ.get("USE_AGENT", "true").lower() in ("true", "1", "yes")
+
+if USE_AGENT:
+    from agent.orchestrator import create_agent, process_message_sync
+
 # --- Page Config ---
 st.set_page_config(
     page_title="TARA — Transport Assessment & Road Appraisal",
@@ -37,6 +43,8 @@ if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
 if "stage" not in st.session_state:
     st.session_state.stage = "start"  # start → road_found → inputs → analysis → report
+if USE_AGENT and "agent_state" not in st.session_state:
+    st.session_state.agent_state = create_agent()
 
 
 # --- Sidebar ---
@@ -45,7 +53,11 @@ with st.sidebar:
     st.title("TARA")
     st.caption("Transport Assessment & Road Appraisal")
     st.markdown("---")
-    
+
+    if USE_AGENT:
+        st.markdown("### Mode")
+        st.success("AI Agent (Opus 4.6)")
+
     st.markdown("### Current Stage")
     stages = {
         "start": "🔍 Waiting for road name...",
@@ -55,7 +67,7 @@ with st.sidebar:
         "report": "📄 Report ready",
     }
     st.info(stages.get(st.session_state.stage, "Unknown"))
-    
+
     if st.session_state.road_data and st.session_state.road_data.get("found"):
         st.markdown("### Road Summary")
         rd = st.session_state.road_data
@@ -63,14 +75,14 @@ with st.sidebar:
         st.metric("Segments", rd["segment_count"])
         if rd["attributes"].get("surface_types"):
             st.metric("Surface", ", ".join(rd["attributes"]["surface_types"]))
-    
+
     if st.session_state.facilities_data:
         fd = st.session_state.facilities_data
         st.markdown("### Nearby Facilities")
         for cat, items in fd["facilities"].items():
             if items:
                 st.metric(cat.title(), len(items))
-    
+
     st.markdown("---")
     st.markdown(
         "Built for the [Anthropic Claude Code Hackathon](https://cerebralvalley.ai/e/claude-code-hackathon) "
@@ -100,42 +112,88 @@ if not st.session_state.messages:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        
-        # Display map if attached to message
-        if message.get("map"):
+
+        # Display maps if attached to message
+        if message.get("maps"):
+            from streamlit_folium import st_folium
+            for m in message["maps"]:
+                st_folium(m, width=700, height=450, returned_objects=[])
+        elif message.get("map"):
             from streamlit_folium import st_folium
             st_folium(message["map"], width=700, height=450, returned_objects=[])
 
 
 # --- Chat Input ---
 if prompt := st.chat_input("Name a road to appraise (e.g., 'Kasangati-Matugga road')"):
-    
+
     # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
-    
-    # Process based on current stage
-    if st.session_state.stage == "start" or "appraise" in prompt.lower() or "road" in prompt.lower():
-        _handle_road_search(prompt)
-    elif st.session_state.stage == "inputs":
-        _handle_input_response(prompt)
-    else:
-        _handle_general_message(prompt)
 
+    if USE_AGENT:
+        _handle_agent_message(prompt)
+    else:
+        # Legacy direct-call flow
+        if st.session_state.stage == "start" or "appraise" in prompt.lower() or "road" in prompt.lower():
+            _handle_road_search(prompt)
+        elif st.session_state.stage == "inputs":
+            _handle_input_response(prompt)
+        else:
+            _handle_general_message(prompt)
+
+
+# --- Agent Message Handler ---
+
+def _handle_agent_message(prompt: str):
+    """Process a message through the Opus 4.6 agent."""
+    with st.chat_message("assistant"):
+        with st.spinner("TARA is thinking..."):
+            response_text, updated_state, maps = process_message_sync(
+                st.session_state.agent_state,
+                prompt,
+            )
+
+        st.markdown(response_text)
+
+        # Display any maps returned
+        if maps:
+            from streamlit_folium import st_folium
+            for m in maps:
+                st_folium(m, width=700, height=450, returned_objects=[])
+
+        # Update session state from agent state
+        st.session_state.agent_state = updated_state
+
+        if updated_state.get("road_data"):
+            st.session_state.road_data = updated_state["road_data"]
+            st.session_state.stage = "road_found"
+        if updated_state.get("facilities_data"):
+            st.session_state.facilities_data = updated_state["facilities_data"]
+        if updated_state.get("cba_results"):
+            st.session_state.analysis_results = updated_state["cba_results"]
+            st.session_state.stage = "analysis"
+
+        # Store message
+        msg_data = {"role": "assistant", "content": response_text}
+        if maps:
+            msg_data["maps"] = maps
+        st.session_state.messages.append(msg_data)
+
+
+# --- Legacy Direct-Call Handlers ---
 
 def _handle_road_search(prompt: str):
-    """Handle a road search request."""
-    
+    """Handle a road search request (legacy mode)."""
+
     with st.chat_message("assistant"):
-        # Extract road name from prompt
         road_name = _extract_road_name(prompt)
-        
+
         st.markdown(f"🔍 Searching for **{road_name}** on OpenStreetMap...")
-        
+
         with st.spinner("Querying OpenStreetMap..."):
             road_data = search_road(road_name, "Uganda")
-        
+
         if not road_data.get("found"):
             msg = (
                 f"I couldn't find **{road_name}** on OpenStreetMap. "
@@ -147,37 +205,31 @@ def _handle_road_search(prompt: str):
             st.markdown(msg)
             st.session_state.messages.append({"role": "assistant", "content": msg})
             return
-        
+
         st.session_state.road_data = road_data
-        
-        # Display road summary
+
         summary = get_road_summary(road_data)
         st.markdown("✅ **Road found!**\n\n" + summary)
-        
-        # Search for facilities
+
         st.markdown("\n🏥 Searching for nearby facilities...")
         with st.spinner("Finding health centres, schools, markets..."):
             facilities_data = find_facilities(road_data["bbox"], buffer_km=3.0)
-            
-            # Calculate distances to road
+
             for cat, items in facilities_data["facilities"].items():
                 if items and road_data.get("coordinates_all"):
                     facilities_data["facilities"][cat] = calculate_distances_to_road(
                         items, road_data["coordinates_all"]
                     )
-        
+
         st.session_state.facilities_data = facilities_data
-        
-        # Display facilities summary
+
         fac_summary = get_facilities_summary(facilities_data)
         st.markdown(fac_summary)
-        
-        # Create and display map
+
         road_map = create_road_map(road_data, facilities_data)
         from streamlit_folium import st_folium
         st_folium(road_map, width=700, height=450, returned_objects=[])
-        
-        # Next steps message
+
         next_msg = (
             "\n---\n"
             "### What I found\n"
@@ -192,31 +244,29 @@ def _handle_road_search(prompt: str):
             "*Or upload a dashcam video and I'll assess the condition for you.*"
         )
         st.markdown(next_msg)
-        
-        # Store message with map reference
+
         full_msg = f"✅ **Road found!**\n\n{summary}\n\n{fac_summary}\n{next_msg}"
         st.session_state.messages.append({
             "role": "assistant",
             "content": full_msg,
             "map": road_map,
         })
-        
+
         st.session_state.stage = "road_found"
 
 
 def _handle_input_response(prompt: str):
-    """Handle user providing analysis inputs."""
-    # TODO: Parse traffic, cost, condition from natural language
+    """Handle user providing analysis inputs (legacy mode)."""
     with st.chat_message("assistant"):
         st.markdown("Thank you! Let me process those inputs and run the analysis...")
         st.session_state.messages.append({
             "role": "assistant",
-            "content": "Thank you! Processing inputs... (Analysis engine coming in Day 2)"
+            "content": "Thank you! Processing inputs... (Use agent mode for full analysis)"
         })
 
 
 def _handle_general_message(prompt: str):
-    """Handle general conversation."""
+    """Handle general conversation (legacy mode)."""
     with st.chat_message("assistant"):
         msg = "I'm ready to help with road appraisal. Tell me a road name to get started!"
         st.markdown(msg)
@@ -225,26 +275,23 @@ def _handle_general_message(prompt: str):
 
 def _extract_road_name(prompt: str) -> str:
     """Extract road name from a natural language prompt."""
-    # Remove common prefixes
     lower = prompt.lower()
-    for prefix in ["appraise the", "appraise", "assess the", "assess", 
+    for prefix in ["appraise the", "appraise", "assess the", "assess",
                     "find the", "find", "search for", "look up", "analyse the",
                     "analyze the"]:
         if lower.startswith(prefix):
             prompt = prompt[len(prefix):].strip()
             break
-    
-    # Remove trailing words
+
     for suffix in [" road upgrade", " upgrade", " improvement", " project",
                    " rehabilitation", " please", " for me"]:
         if prompt.lower().endswith(suffix):
             prompt = prompt[:-len(suffix)].strip()
             break
-    
-    # Add "road" if not present and it looks like place names
+
     if "road" not in prompt.lower() and "highway" not in prompt.lower():
         prompt = prompt + " road"
-    
+
     return prompt.strip()
 
 
