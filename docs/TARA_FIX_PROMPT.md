@@ -8,22 +8,30 @@ The app is a Dash (Plotly) 7-step wizard with dash-leaflet map. ~7,000 lines acr
 
 ---
 
-## Priority 1: CRITICAL — Replace Live OSM Search with Local UNRA Road Database
+## Priority 1: CRITICAL — Replace Live OSM Search with Local Road Database
 
-The current Overpass API search returns no results. Instead of fixing it, we are replacing it with a local road database using the official UNRA road network published on the Humanitarian Data Exchange.
+The current Overpass API search returns no results. Instead of fixing it, we are replacing it with a pre-downloaded local road database.
 
-### Step 1A: Download the UNRA GeoJSON
+### Step 1A: Convert the Road Data
 
-Download this file and save it to `data/unra_road_network.geojson`:
+The raw shapefile has already been downloaded and placed at `data/hotosm_uga_roads.zip`. Do NOT re-download it. This is a zipped shapefile containing ALL roads in Uganda (~313,000 km). We only want main roads.
+
+Install dependencies if needed:
+```bash
+pip install geopandas fiona shapely
 ```
-https://data.humdata.org/dataset/1958a079-7496-4403-8364-f404e79fdc1b/resource/de808dbe-0b37-46ca-899f-51dd6dd83f74/download/unra_road_network.geojson
-```
 
-After downloading, inspect the file:
-- How many road features are there?
-- What properties does each feature have? (name, road class, surface, length, etc.)
-- What does the geometry look like? (LineString, MultiLineString?)
-- Print a sample of 5 road features with their properties
+Write a one-time conversion script `scripts/build_road_database.py` that:
+1. Unzips and reads the shapefile using geopandas
+2. Filters to main roads only: `highway` in (`trunk`, `primary`, `secondary`, `tertiary`) — this should give a few thousand roads, not hundreds of thousands
+3. Keeps only named roads (filter out features where `name` is null/empty)
+4. For each road, extract: `osm_id`, `name`, `highway` class, `surface`, `width`, `lanes`, `smoothness`, `bridge`, geometry
+5. Saves as `data/uganda_main_roads.geojson` — this is the file the app will use at runtime
+6. Print summary: how many roads total, breakdown by highway class, how many have names
+
+Run the script and verify the output. The resulting GeoJSON should be a manageable size (a few MB, not hundreds).
+
+**IMPORTANT:** Do NOT commit the raw shapefile zip to git (it's huge). Add `data/hotosm_uga_roads.zip` to `.gitignore`. Only the processed `data/uganda_main_roads.geojson` goes in the repo.
 
 ### Step 1B: Build the Road Database Loader
 
@@ -31,48 +39,53 @@ Create `skills/road_database.py` with these functions:
 
 ```python
 def load_road_network() -> dict:
-    """Load the UNRA GeoJSON file and return parsed data."""
-    # Load from data/unra_road_network.geojson
+    """Load the processed GeoJSON and return parsed data."""
+    # Load from data/uganda_main_roads.geojson
     # Cache in memory after first load (module-level variable)
 
 def search_roads(query: str) -> list[dict]:
     """Search roads by name. Case-insensitive fuzzy matching."""
-    # Return list of matches with: id, name, road_class, surface, length_km, geometry
+    # Return list of matches with: id, name, highway_class, surface, length_km, geometry
     # Sort by relevance (exact match first, then starts-with, then contains)
+    # Limit results to top 50 to keep dropdown responsive
 
 def get_road_by_id(road_id: str) -> dict:
     """Get a single road's full data including geometry."""
     # Return complete road record for display on map and use in analysis
 
 def list_all_roads() -> list[dict]:
-    """Return all roads (name, id, class) for dropdown population."""
-    # Lightweight list without geometry, for UI dropdowns
+    """Return summary of all roads (name, id, class) for dropdown population."""
+    # Lightweight list WITHOUT geometry, for UI dropdowns
+    # Sort alphabetically by name
+    # Format label as "Road Name (highway class, Xkm)" for the dropdown
 ```
 
 Requirements:
 - Type hints on all functions, docstrings on all public functions
-- Calculate length_km from geometry if not in properties (use haversine)
+- Calculate length_km from geometry using haversine formula
 - Handle both LineString and MultiLineString geometry types
-- Extract all available properties: name, ref, highway class, surface, width, lanes
-- Generate a stable ID for each road (use OSM ID if available, or hash of name + geometry)
+- Generate a stable ID for each road (use osm_id if available, or index)
+- Road names in Uganda often include the format "Town A - Town B Road" — preserve these
 
 ### Step 1C: Rewire Step 1 in app.py
 
 Replace the current Overpass-based search with the local database:
-- Replace the search text input + search button with a **searchable dropdown** (dcc.Dropdown with `searchable=True`) populated from `list_all_roads()`
+- Replace the search text input + search button with a **searchable dropdown** (`dcc.Dropdown` with `searchable=True`, `placeholder="Type to search roads..."`)
+- Populate dropdown options from `list_all_roads()` on app startup
 - When user selects a road, call `get_road_by_id()` to get full data
 - Display the road on the dash-leaflet map using the GeoJSON geometry
 - Show road attributes in the info panel: name, class, surface, length, width, lanes
 - Store the road data in the existing `road-data-store` dcc.Store
-- Also trigger `osm_facilities.py` to find nearby facilities (this still uses Overpass, which is fine — it's a one-time background fetch, not the critical path)
+- Also trigger `osm_facilities.py` to find nearby facilities (this still uses Overpass for facilities, which is fine — wrap in try/except with retry)
 
 ### Step 1D: Test end-to-end
 
 - App starts without errors
-- Dropdown shows roads from the UNRA network
-- User can search/filter by typing
-- Selecting a road shows it on the map
-- Road data is stored correctly for use in later steps
+- Dropdown shows roads from the database
+- User can search/filter by typing (e.g. typing "Kasangati" shows matching roads)
+- Selecting a road shows it on the map with correct geometry
+- Road data is stored correctly for use in later steps (verify by clicking through to Step 2)
+- Facilities load for the selected road (or fail gracefully)
 
 Do NOT move to other fixes until Step 1 works end-to-end.
 
@@ -88,7 +101,7 @@ After Step 1 is working, fix these. Bugs B and F touch independent files and CAN
 - Only the dashcam upload populates `condition-store`
 - Fix: add a callback that stores manual condition selections into `condition-store`
 - Make sure the CBA in Step 5 reads condition data from `condition-store` regardless of whether it came from manual entry or dashcam
-- Also: pre-fill the surface type from the road database data if available
+- Also: pre-fill the surface type from the road database data if available (the GeoJSON may have `surface` property)
 
 ### Bug C: Traffic class inputs disconnected (app.py Step 3 + engine/cba.py)
 - Step 3 has per-vehicle-class ADT inputs (cars, buses, HGV, semi-trailers) with percentage splits
@@ -103,10 +116,10 @@ After Step 1 is working, fix these. Bugs B and F touch independent files and CAN
 - If truncated, complete it properly
 - Add logging so we know if it fails (currently wrapped in silent try/except)
 
-### Fix F: Overpass retry logic (skills/osm_lookup.py + skills/osm_facilities.py) — CAN BE SUB-AGENT
+### Fix F: Overpass retry logic (skills/osm_facilities.py) — CAN BE SUB-AGENT
 - Add retry with exponential backoff (3 attempts, 2s/4s/8s delays) to all Overpass API calls
 - On final failure, return empty results with a clear error message instead of silent failure
-- Note: osm_lookup.py is no longer used for Step 1 road search, but keep it functional as a fallback and for potential future use. osm_facilities.py IS still used for finding facilities near the selected road.
+- osm_facilities.py IS still used for finding facilities near the selected road
 
 ---
 
@@ -116,7 +129,7 @@ Only after Priorities 1 and 2 are done.
 
 ### Fix D: Inconsistent road_data key
 - Step 7 callbacks use `road_data.get('name')` in some places and `road_data.get('road_name')` in others
-- Find ALL occurrences across the entire codebase and standardise to whichever key is set in Step 1 when road data is stored
+- Find ALL occurrences across the entire codebase and standardise to whichever key is set in Step 1 when road data is stored from the new road_database.py
 - Verify by running Step 7 (report generation) and checking that the road name appears correctly in PDF and CSV filenames
 
 ### Fix E: Input validation
@@ -140,3 +153,4 @@ Only after Priorities 1 and 2 are done.
 - All costs in USD, distances in km
 - Update CLAUDE.md build status when fixes are complete
 - When creating road_database.py, keep osm_lookup.py intact — don't delete it
+- Add `data/hotosm_uga_roads.zip` and `data/*.shp` to .gitignore — only the processed GeoJSON goes in the repo

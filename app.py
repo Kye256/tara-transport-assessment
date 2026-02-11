@@ -16,7 +16,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 import dash
-from dash import html, dcc, Input, Output, State, callback, no_update, ctx
+from dash import html, dcc, Input, Output, State, callback, no_update, ctx, ALL
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 
@@ -128,41 +128,24 @@ def make_step_indicator(active_step: int = 1) -> html.Div:
 # Step Content Builders
 # ============================================================
 
+def _build_road_dropdown_options() -> list[dict]:
+    """Pre-load road dropdown options from local database."""
+    from skills.road_database import list_all_roads
+    return [{"label": r["label"], "value": r["id"]} for r in list_all_roads()]
+
+
 def build_step1():
     return dbc.Card(dbc.CardBody([
         html.H5("Step 1: Select Road", className="card-title"),
-        html.P("Search for a road on OpenStreetMap.", className="text-muted"),
-        dbc.InputGroup([
-            dbc.Input(
-                id="road-search-input",
-                placeholder="e.g. Kasangati-Matugga road",
-                type="text",
-                debounce=True,
-            ),
-            dbc.Button("Search", id="road-search-btn", color="primary"),
-        ], className="mb-3"),
-        dbc.Select(
-            id="country-select",
-            options=[
-                {"label": "Uganda", "value": "Uganda"},
-                {"label": "Kenya", "value": "Kenya"},
-                {"label": "Tanzania", "value": "Tanzania"},
-                {"label": "Rwanda", "value": "Rwanda"},
-                {"label": "Ethiopia", "value": "Ethiopia"},
-            ],
-            value="Uganda",
+        html.P("Choose a road from the Uganda UNRA network.", className="text-muted"),
+        dcc.Dropdown(
+            id="road-select-dropdown",
+            options=_build_road_dropdown_options(),
+            placeholder="Type to search roads...",
+            searchable=True,
             className="mb-3",
-            style={"maxWidth": "200px"},
         ),
-        html.Div(id="road-candidates-area"),
-        dcc.Loading(type="circle", children=
-            dbc.RadioItems(
-                id="road-candidate-radio", options=[],
-                className="mb-2",
-                labelStyle={"display": "block", "cursor": "pointer", "padding": "4px 0"},
-            ),
-        ),
-        html.Div(id="road-search-result"),
+        dcc.Loading(type="circle", children=html.Div(id="road-search-result")),
     ]), className="mb-3")
 
 
@@ -261,6 +244,7 @@ def build_step3():
             dbc.Col(html.Small("Share %", className="fw-bold"), md=3),
         ], className="mb-1"),
         *rows,
+        html.Div(id="traffic-warnings"),
     ]), className="mb-3")
 
 
@@ -303,6 +287,7 @@ def build_step4():
                           value=BASE_YEAR, min=2020, max=2035, step=1),
             ], md=6),
         ], className="mb-3"),
+        html.Div(id="cost-warnings"),
     ]), className="mb-3")
 
 
@@ -371,7 +356,6 @@ ALL_STEPS = {
 app.layout = dbc.Container([
     # Stores
     dcc.Store(id="current-step-store", data=1),
-    dcc.Store(id="road-candidates-store", data=None),
     dcc.Store(id="road-data-store", data=None),
     dcc.Store(id="facilities-data-store", data=None),
     dcc.Store(id="condition-store", data=None),
@@ -494,70 +478,7 @@ def update_step_display(current_step):
     return indicator, back_disabled, next_disabled, *styles
 
 
-# --- Step 1: Road Search (phase 1 — find candidates) ---
-
-@callback(
-    Output("road-candidates-area", "children"),
-    Output("road-candidate-radio", "options"),
-    Output("road-candidate-radio", "value"),
-    Output("road-candidates-store", "data"),
-    Output("road-search-result", "children", allow_duplicate=True),
-    Input("road-search-btn", "n_clicks"),
-    Input("road-search-input", "n_submit"),
-    State("road-search-input", "value"),
-    State("country-select", "value"),
-    prevent_initial_call=True,
-)
-def search_road_candidates(n_clicks, n_submit, road_name, country):
-    if not road_name:
-        return (
-            dbc.Alert("Please enter a road name.", color="warning"),
-            no_update, no_update, no_update, no_update,
-        )
-
-    from skills.osm_lookup import search_roads_multi
-
-    candidates = search_roads_multi(road_name, country)
-
-    if not candidates:
-        return (
-            dbc.Alert([
-                html.Strong("No roads found. "),
-                "Try a more specific name or include nearby towns.",
-            ], color="danger"),
-            [], None, None, html.Div(),
-        )
-
-    # Build radio options
-    options = []
-    for i, c in enumerate(candidates):
-        hw = ", ".join(c["highway_types"]) if c["highway_types"] else "road"
-        label = f"{c['name']}  —  {c['total_length_km']} km, {hw} ({c['segment_count']} segments)"
-        options.append({"label": label, "value": i})
-
-    # Auto-select if only 1 candidate
-    if len(candidates) == 1:
-        return (
-            html.Div(),
-            options,
-            0,  # auto-select first (triggers select callback)
-            _make_serializable(candidates),
-            html.Div(),
-        )
-
-    return (
-        dbc.Alert(
-            f"Found {len(candidates)} matching roads. Select one:",
-            color="info", className="py-2 mb-0",
-        ),
-        options,
-        None,  # no selection yet — user picks
-        _make_serializable(candidates),
-        html.Div(),
-    )
-
-
-# --- Step 1: Road Selection (phase 2 — load chosen candidate) ---
+# --- Step 1: Road Selection ---
 
 @callback(
     Output("road-search-result", "children"),
@@ -567,92 +488,87 @@ def search_road_candidates(n_clicks, n_submit, road_name, country):
     Output("main-map", "center"),
     Output("main-map", "zoom"),
     Output("main-map", "bounds"),
-    Input("road-candidate-radio", "value"),
-    State("road-candidates-store", "data"),
+    Input("road-select-dropdown", "value"),
     prevent_initial_call=True,
 )
-def select_road_candidate(selected_idx, candidates):
-    if selected_idx is None or candidates is None:
+def select_road(road_id):
+    if not road_id:
         return (no_update,) * 7
 
-    candidate = candidates[selected_idx]
-
-    from skills.osm_lookup import load_road_by_ids
-    from skills.osm_facilities import (
-        find_facilities, calculate_distances_to_road,
-    )
+    from skills.road_database import get_road_by_id
     from output.maps import create_road_map
 
-    element_ids = candidate.get("element_ids", [])
-    road_name = candidate["name"]
-
-    if element_ids and candidate.get("source") != "nominatim":
-        road_data = load_road_by_ids(element_ids, road_name)
-    else:
-        # Nominatim fallback candidate — re-search by name
-        from skills.osm_lookup import search_road
-        road_data = search_road(road_name)
-
-    if not road_data.get("found"):
+    road_record = get_road_by_id(road_id)
+    if not road_record:
         return (
-            dbc.Alert([
-                html.Strong("Could not load road details. "),
-                "Try searching again.",
-            ], color="danger"),
+            dbc.Alert("Road not found in database.", color="danger"),
             None, None, no_update, no_update, no_update, no_update,
         )
 
-    # Build bbox for facility search
-    bbox = road_data.get("bbox")
-    if not bbox:
-        lat = road_data.get("latitude") or road_data.get("center", {}).get("lat", 0.35)
-        lon = road_data.get("longitude") or road_data.get("center", {}).get("lon", 32.58)
-        pad = 0.03
-        bbox = {"south": lat - pad, "north": lat + pad, "west": lon - pad, "east": lon + pad}
-        road_data["bbox"] = bbox
+    # Convert road_database format → road_data format expected by rest of app
+    surface_types = [s.strip() for s in (road_record["surface"] or "unknown").split(",")]
+    road_data = {
+        "road_name": road_record["name"],
+        "name": road_record["name"],
+        "found": True,
+        "source": "local_database",
+        "total_length_km": road_record["length_km"],
+        "segment_count": road_record["segment_count"],
+        "center": road_record["center"],
+        "bbox": road_record["bbox"],
+        "attributes": {
+            "surface_types": surface_types,
+            "highway_types": [road_record["highway_class"]],
+            "avg_width_m": None,
+            "lanes": [road_record["lanes"]] if road_record["lanes"] else [],
+            "names_found": [road_record["name"]],
+        },
+        "segments": _build_segments_from_geometries(road_record),
+        "coordinates_all": road_record["coordinates"],
+    }
 
-    facilities_data = find_facilities(bbox, buffer_km=3.0)
-    for cat, items in facilities_data["facilities"].items():
-        if items and road_data.get("coordinates_all"):
-            facilities_data["facilities"][cat] = calculate_distances_to_road(
-                items, road_data["coordinates_all"]
-            )
-
-    if not road_data.get("center"):
-        road_data["center"] = {
-            "lat": road_data.get("latitude", bbox["south"] + (bbox["north"] - bbox["south"]) / 2),
-            "lon": road_data.get("longitude", bbox["west"] + (bbox["east"] - bbox["west"]) / 2),
-        }
+    # Try to load facilities (uses Overpass — wrap in try/except)
+    facilities_data = {"facilities": {}, "total_count": 0}
+    try:
+        from skills.osm_facilities import find_facilities, calculate_distances_to_road
+        bbox = road_data["bbox"]
+        facilities_data = find_facilities(bbox, buffer_km=3.0)
+        for cat, items in facilities_data["facilities"].items():
+            if items and road_data.get("coordinates_all"):
+                facilities_data["facilities"][cat] = calculate_distances_to_road(
+                    items, road_data["coordinates_all"]
+                )
+    except Exception as e:
+        print(f"Facilities lookup failed (non-critical): {e}")
 
     map_result = create_road_map(road_data, facilities_data)
 
-    attrs = road_data.get("attributes", {})
     info_cards = dbc.Row([
         dbc.Col(dbc.Card(dbc.CardBody([
-            html.H6(f"{road_data.get('total_length_km', '?')} km",
+            html.H6(f"{road_data['total_length_km']} km",
                      className="mb-0 text-primary"),
             html.Small("Length", className="text-muted"),
         ]), className="text-center"), md=3),
         dbc.Col(dbc.Card(dbc.CardBody([
-            html.H6(f"{road_data.get('segment_count', '?')}",
+            html.H6(f"{road_data['segment_count']}",
                      className="mb-0 text-primary"),
             html.Small("Segments", className="text-muted"),
         ]), className="text-center"), md=3),
         dbc.Col(dbc.Card(dbc.CardBody([
-            html.H6(", ".join(attrs.get("surface_types", ["?"])),
+            html.H6(road_record["surface"] or "unknown",
                      className="mb-0 text-primary"),
             html.Small("Surface", className="text-muted"),
         ]), className="text-center"), md=3),
         dbc.Col(dbc.Card(dbc.CardBody([
-            html.H6(f"{facilities_data.get('total_count', 0)}",
+            html.H6(road_record["highway_class"].replace("_", " ").title(),
                      className="mb-0 text-primary"),
-            html.Small("Facilities", className="text-muted"),
+            html.Small("Road Class", className="text-muted"),
         ]), className="text-center"), md=3),
     ], className="mb-2")
 
     result_ui = html.Div([
         dbc.Alert(
-            html.Strong(f"Selected: {road_data.get('road_name', road_name)}"),
+            html.Strong(f"Selected: {road_record['name']}"),
             color="success", className="py-2",
         ),
         info_cards,
@@ -667,6 +583,53 @@ def select_road_candidate(selected_idx, candidates):
         map_result["zoom"],
         map_result.get("bounds"),
     )
+
+
+def _extract_segment_coords(geom: dict) -> list[tuple[float, float]]:
+    """Extract (lat, lon) coords from a single GeoJSON geometry."""
+    coords = []
+    if geom.get("type") == "LineString":
+        for lon, lat, *_ in geom.get("coordinates", []):
+            coords.append((lat, lon))
+    elif geom.get("type") == "MultiLineString":
+        for line in geom.get("coordinates", []):
+            for lon, lat, *_ in line:
+                coords.append((lat, lon))
+    return coords
+
+
+def _haversine_pair(c1: tuple, c2: tuple) -> float:
+    """Haversine distance between two (lat, lon) tuples in km."""
+    import math
+    R = 6371
+    dlat = math.radians(c2[0] - c1[0])
+    dlon = math.radians(c2[1] - c1[1])
+    a = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(c1[0])) * math.cos(math.radians(c2[0])) *
+         math.sin(dlon / 2) ** 2)
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def _build_segments_from_geometries(road_record: dict) -> list[dict]:
+    """Convert road_database geometries list into segments for create_road_map."""
+    segments = []
+    for i, geom in enumerate(road_record.get("geometries", [])):
+        coords = _extract_segment_coords(geom)
+        length = sum(
+            _haversine_pair(coords[j], coords[j + 1])
+            for j in range(len(coords) - 1)
+        ) if len(coords) > 1 else 0.0
+        segments.append({
+            "osm_id": road_record["osm_ids"][i] if i < len(road_record["osm_ids"]) else "",
+            "name": road_record["name"],
+            "highway_type": road_record["highway_class"],
+            "surface": road_record["surface"] or "unknown",
+            "width": road_record["width"] or "unknown",
+            "lanes": road_record["lanes"] or "unknown",
+            "coordinates": coords,
+            "length_km": round(length, 3),
+        })
+    return segments
 
 
 # --- Step 2: Pre-fill surface from OSM ---
@@ -691,11 +654,49 @@ def prefill_surface(road_data):
     return "gravel"
 
 
+# --- Step 2: Manual Condition Entry ---
+
+IRI_DEFAULTS = {"good": 3.0, "fair": 6.0, "poor": 11.0, "very_poor": 16.0}
+
+
+@callback(
+    Output("condition-store", "data", allow_duplicate=True),
+    Input("surface-type-select", "value"),
+    Input("condition-rating-select", "value"),
+    Input("iri-input", "value"),
+    prevent_initial_call=True,
+)
+def store_manual_condition(surface_type, condition_rating, iri_override):
+    """Store manual condition selections into condition-store."""
+    iri = float(iri_override) if iri_override else IRI_DEFAULTS.get(condition_rating, 11.0)
+    return {
+        "source": "manual",
+        "surface_type": surface_type or "gravel",
+        "condition_rating": condition_rating or "poor",
+        "iri": iri,
+        "overall_condition": _iri_to_score(iri),
+    }
+
+
+def _iri_to_score(iri: float) -> int:
+    """Convert IRI (m/km) to a 0-100 condition score (higher = better)."""
+    if iri <= 2:
+        return 95
+    elif iri <= 4:
+        return 80
+    elif iri <= 8:
+        return 60
+    elif iri <= 14:
+        return 35
+    else:
+        return 15
+
+
 # --- Step 2: Dashcam Upload ---
 
 @callback(
     Output("dashcam-result", "children"),
-    Output("condition-store", "data"),
+    Output("condition-store", "data", allow_duplicate=True),
     Input("dashcam-upload", "contents"),
     State("dashcam-upload", "filename"),
     State("road-data-store", "data"),
@@ -754,6 +755,66 @@ def update_cost_per_km(total_cost, road_data):
     return html.Span("\u2014")
 
 
+# --- Input Validation Warnings ---
+
+@callback(
+    Output("traffic-warnings", "children"),
+    Input("total-adt-input", "value"),
+)
+def validate_traffic(adt):
+    """Show warnings for unusual traffic values."""
+    if not adt:
+        return html.Div()
+    warnings = []
+    if adt > 50000:
+        warnings.append("Traffic seems very high (>50,000 ADT) \u2014 please verify.")
+    elif adt < 10:
+        warnings.append("Traffic seems very low (<10 ADT) \u2014 please verify.")
+    if not warnings:
+        return html.Div()
+    return html.Div([
+        dbc.Alert(w, color="warning", className="py-1 mb-1", style={"fontSize": "0.85rem"})
+        for w in warnings
+    ])
+
+
+@callback(
+    Output("cost-warnings", "children"),
+    Input("total-cost-input", "value"),
+    Input("discount-rate-input", "value"),
+    Input("analysis-period-input", "value"),
+    State("road-data-store", "data"),
+)
+def validate_costs(total_cost, discount_rate_pct, analysis_period, road_data):
+    """Show warnings for unusual cost/parameter values."""
+    warnings = []
+    length = 10.0
+    if road_data and road_data.get("total_length_km"):
+        length = road_data["total_length_km"]
+    if total_cost and length > 0:
+        cost_per_km = total_cost / length
+        if cost_per_km < 50000:
+            warnings.append(f"Cost per km (${cost_per_km:,.0f}) seems very low for Uganda.")
+        elif cost_per_km > 2000000:
+            warnings.append(f"Cost per km (${cost_per_km:,.0f}) seems very high for Uganda.")
+    if discount_rate_pct is not None:
+        if discount_rate_pct < 6:
+            warnings.append("Discount rate below 6% is unusually low.")
+        elif discount_rate_pct > 18:
+            warnings.append("Discount rate above 18% is unusually high.")
+    if analysis_period is not None:
+        if analysis_period > 30:
+            warnings.append("Analysis period over 30 years may reduce reliability.")
+        elif analysis_period < 10:
+            warnings.append("Analysis period under 10 years is unusually short.")
+    if not warnings:
+        return html.Div()
+    return html.Div([
+        dbc.Alert(w, color="warning", className="py-1 mb-1", style={"fontSize": "0.85rem"})
+        for w in warnings
+    ])
+
+
 # --- Step 5: Run CBA ---
 
 @callback(
@@ -766,8 +827,10 @@ def update_cost_per_km(total_cost, road_data):
     Input("run-cba-btn", "n_clicks"),
     State("road-data-store", "data"),
     State("facilities-data-store", "data"),
+    State("condition-store", "data"),
     State("total-adt-input", "value"),
     State("growth-rate-input", "value"),
+    State({"type": "traffic-pct", "vc": ALL}, "value"),
     State("total-cost-input", "value"),
     State("construction-years-input", "value"),
     State("discount-rate-input", "value"),
@@ -776,8 +839,9 @@ def update_cost_per_km(total_cost, road_data):
     prevent_initial_call=True,
 )
 def run_cba_callback(
-    n_clicks, road_data, facilities_data,
-    adt, growth_rate_pct, total_cost, construction_years,
+    n_clicks, road_data, facilities_data, condition_data,
+    adt, growth_rate_pct, traffic_pct_values,
+    total_cost, construction_years,
     discount_rate_pct, analysis_period, base_year,
 ):
     from engine.cba import run_cba
@@ -799,6 +863,17 @@ def run_cba_callback(
     growth_rate = (growth_rate_pct or 3.5) / 100.0
     discount_rate = (discount_rate_pct or 12.0) / 100.0
 
+    # Build vehicle split from per-class percentage inputs
+    vehicle_split = None
+    if traffic_pct_values:
+        raw_split = {}
+        for i, vc in enumerate(VEHICLE_CLASSES):
+            pct = traffic_pct_values[i] if i < len(traffic_pct_values) else 0
+            raw_split[vc] = float(pct or 0)
+        total_pct = sum(raw_split.values())
+        if total_pct > 0:
+            vehicle_split = {vc: v / total_pct for vc, v in raw_split.items()}
+
     cba_inputs = {
         "base_adt": float(adt),
         "growth_rate": growth_rate,
@@ -808,6 +883,7 @@ def run_cba_callback(
         "discount_rate": discount_rate,
         "analysis_period": int(analysis_period or 20),
         "base_year": int(base_year or 2025),
+        "vehicle_split": vehicle_split,
     }
 
     try:
@@ -823,7 +899,10 @@ def run_cba_callback(
     try:
         from skills.worldpop import get_population
         if road_data and road_data.get("found"):
-            pop_data = get_population(road_data)
+            pop_data = get_population(
+                road_data.get("bbox", {}),
+                road_coords=road_data.get("coordinates_all"),
+            )
     except Exception:
         pass
 

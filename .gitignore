@@ -10,8 +10,14 @@ dist/
 build/
 *.egg
 
-# Data files
+# Data files (raw/large — only processed GeoJSON goes in repo)
 data/worldpop/*.tif
+data/hotosm_uga_roads.zip
+data/*.shp
+data/*.shx
+data/*.dbf
+data/*.prj
+data/*.cpg
 
 # IDE
 .vscode/
