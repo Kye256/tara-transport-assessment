@@ -148,6 +148,30 @@ SENSITIVITY_VARIABLES = {
     "construction_delay": {"test_values": [1, 2, 3]},  # Additional years
 }
 
+# WorldPop parameters
+WORLDPOP_API_URL = "https://api.worldpop.org/v1/services/stats"
+WORLDPOP_DATASET = "wpgppop"
+WORLDPOP_YEAR = 2020
+WORLDPOP_RASTER_URL = "https://data.worldpop.org/GIS/Population/Global_2000_2020/{year}/UGA/uga_ppp_{year}.tif"
+WORLDPOP_RASTER_DIR = "data/worldpop"
+POPULATION_BUFFERS_KM = [2.0, 5.0, 10.0]
+UGANDA_POPULATION_GROWTH_RATE = 0.03  # ~3% per year for extrapolating 2020→current
+
+# Density classification thresholds (people/km²)
+DENSITY_THRESHOLDS = {
+    "rural": 150,       # < 150/km²
+    "peri-urban": 1500,  # 150–1500/km²
+    "urban": float("inf"),  # > 1500/km²
+}
+
+# Uganda poverty estimates (UBOS 2019/20 survey)
+POVERTY_HEADCOUNT_RATIO = {
+    "rural": 0.24,
+    "peri-urban": 0.16,
+    "urban": 0.12,
+    "national": 0.21,
+}
+
 # Equity parameters
 POVERTY_LINE_USD_DAY = 2.15  # World Bank international poverty line
 WALKING_SPEED_KMH = 4.5

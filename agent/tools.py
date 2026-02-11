@@ -1,6 +1,6 @@
 """
 TARA Agent Tool Definitions & Dispatcher
-Defines the 7 tools available to the Opus 4.6 agent and routes execution.
+Defines the 11 tools available to the Opus 4.6 agent and routes execution.
 """
 
 import json
@@ -9,10 +9,14 @@ from typing import Any
 
 from skills.osm_lookup import search_road, get_road_summary
 from skills.osm_facilities import find_facilities, get_facilities_summary, calculate_distances_to_road
+from skills.worldpop import get_population, get_population_summary
+from skills.dashcam import analyze_dashcam_media, get_dashcam_summary
 from output.maps import create_road_map
 from engine.traffic import forecast_traffic
 from engine.cba import run_cba
 from engine.sensitivity import run_sensitivity_analysis
+from engine.equity import calculate_equity_score, get_equity_summary
+from output.report import generate_report_markdown, generate_report_pdf, get_report_summary
 from config.parameters import (
     CONSTRUCTION_COST_BENCHMARKS,
     ROAD_CAPACITY,
@@ -247,6 +251,131 @@ TOOL_DEFINITIONS = [
             "required": [],
         },
     },
+    {
+        "name": "get_population",
+        "description": (
+            "Get population data for a road corridor from WorldPop. Returns population counts "
+            "within 2km, 5km, and 10km buffer zones, population density, area classification "
+            "(rural/peri-urban/urban), and poverty estimates. Requires a bounding box; optionally "
+            "accepts road coordinates for a more accurate corridor polygon."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bbox": {
+                    "type": "object",
+                    "description": "Bounding box with south, north, west, east coordinates",
+                    "properties": {
+                        "south": {"type": "number"},
+                        "north": {"type": "number"},
+                        "west": {"type": "number"},
+                        "east": {"type": "number"},
+                    },
+                    "required": ["south", "north", "west", "east"],
+                },
+                "road_coordinates": {
+                    "type": "array",
+                    "description": "List of [lat, lon] coordinate pairs along the road centerline (optional, improves accuracy)",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                    },
+                },
+                "buffer_km": {
+                    "type": "number",
+                    "description": "Default buffer distance in km (default: 5.0)",
+                    "default": 5.0,
+                },
+                "year": {
+                    "type": "integer",
+                    "description": "WorldPop data year (default: 2020, range: 2000-2020)",
+                    "default": 2020,
+                },
+            },
+            "required": ["bbox"],
+        },
+    },
+    {
+        "name": "calculate_equity",
+        "description": (
+            "Calculate equity impact score for the road project. Assesses accessibility improvement, "
+            "population benefit, poverty impact, and facility access. Returns a composite score (0-100) "
+            "with breakdown by index. Call this after CBA and population data are available."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "road_data": {
+                    "type": "object",
+                    "description": "Road data from search_road (pass the full result)",
+                },
+                "facilities_data": {
+                    "type": "object",
+                    "description": "Facilities data from find_facilities (optional)",
+                },
+                "population_data": {
+                    "type": "object",
+                    "description": "Population data from get_population (optional)",
+                },
+                "cba_results": {
+                    "type": "object",
+                    "description": "CBA results from run_cba (optional, improves poverty scoring)",
+                },
+            },
+            "required": ["road_data"],
+        },
+    },
+    {
+        "name": "generate_report",
+        "description": (
+            "Generate a complete appraisal report in markdown or PDF format. Includes executive summary, "
+            "road description, corridor context, traffic analysis, CBA results, sensitivity analysis, "
+            "equity assessment, risk assessment, and recommendation. Call this as the final step."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "description": "Report format: 'markdown' or 'pdf' or 'both' (default: 'both')",
+                    "enum": ["markdown", "pdf", "both"],
+                    "default": "both",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "analyze_dashcam",
+        "description": (
+            "Analyse road condition from a dashcam image or video using Claude Vision. "
+            "Returns condition score (0-100), surface type, defects, IRI estimate, and drainage condition. "
+            "Requires a file path to an uploaded image (jpg/png) or video (mp4/avi/mov)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the dashcam image or video file",
+                },
+                "media_type": {
+                    "type": "string",
+                    "description": "Type of media: 'image' or 'video'",
+                    "enum": ["image", "video"],
+                    "default": "image",
+                },
+                "sample_interval_sec": {
+                    "type": "number",
+                    "description": "Seconds between frame samples for video (default: 5.0)",
+                    "default": 5.0,
+                },
+            },
+            "required": ["file_path"],
+        },
+    },
 ]
 
 
@@ -279,6 +408,14 @@ def execute_tool(tool_name: str, tool_input: dict) -> dict[str, Any]:
             return _exec_create_map(tool_input)
         elif tool_name == "validate_inputs":
             return _exec_validate_inputs(tool_input)
+        elif tool_name == "get_population":
+            return _exec_get_population(tool_input)
+        elif tool_name == "calculate_equity":
+            return _exec_calculate_equity(tool_input)
+        elif tool_name == "generate_report":
+            return _exec_generate_report(tool_input)
+        elif tool_name == "analyze_dashcam":
+            return _exec_analyze_dashcam(tool_input)
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     except Exception as e:
@@ -490,6 +627,120 @@ def _exec_validate_inputs(tool_input: dict) -> dict:
             if not warnings
             else "Input validation warnings:\n" + "\n".join(f"- {w}" for w in warnings)
         ),
+    }
+
+
+def _exec_get_population(tool_input: dict) -> dict:
+    bbox = tool_input["bbox"]
+    road_coords = tool_input.get("road_coordinates")
+    buffer_km = tool_input.get("buffer_km", 5.0)
+    year = tool_input.get("year", 2020)
+
+    pop_data = get_population(
+        bbox=bbox,
+        road_coords=road_coords,
+        buffer_km=buffer_km,
+        year=year,
+    )
+
+    summary = get_population_summary(pop_data)
+    return {
+        "result": pop_data,
+        "summary": summary,
+        "_population_data": pop_data,
+    }
+
+
+def _exec_calculate_equity(tool_input: dict) -> dict:
+    road_data = tool_input.get("road_data", {})
+    facilities_data = tool_input.get("facilities_data")
+    population_data = tool_input.get("population_data")
+    cba_results = tool_input.get("cba_results")
+
+    result = calculate_equity_score(
+        road_data=road_data,
+        facilities_data=facilities_data,
+        population_data=population_data,
+        cba_results=cba_results,
+    )
+
+    summary = get_equity_summary(result)
+    return {
+        "result": result,
+        "summary": summary,
+        "_equity_results": result,
+    }
+
+
+def _exec_generate_report(tool_input: dict) -> dict:
+    fmt = tool_input.get("format", "both")
+
+    # This tool uses agent state data, injected by the orchestrator
+    road_data = tool_input.get("_road_data")
+    facilities_data = tool_input.get("_facilities_data")
+    population_data = tool_input.get("_population_data")
+    cba_results = tool_input.get("_cba_results")
+    sensitivity_results = tool_input.get("_sensitivity_results")
+    equity_results = tool_input.get("_equity_results")
+    condition_data = tool_input.get("_condition_data")
+
+    result = {}
+
+    if fmt in ("markdown", "both"):
+        md = generate_report_markdown(
+            road_data=road_data,
+            facilities_data=facilities_data,
+            population_data=population_data,
+            cba_results=cba_results,
+            sensitivity_results=sensitivity_results,
+            equity_results=equity_results,
+            condition_data=condition_data,
+        )
+        result["markdown"] = md
+
+    if fmt in ("pdf", "both"):
+        try:
+            pdf_bytes = generate_report_pdf(
+                road_data=road_data,
+                facilities_data=facilities_data,
+                population_data=population_data,
+                cba_results=cba_results,
+                sensitivity_results=sensitivity_results,
+                equity_results=equity_results,
+                condition_data=condition_data,
+            )
+            result["pdf_generated"] = True
+            result["_pdf_bytes"] = pdf_bytes
+        except Exception as e:
+            result["pdf_generated"] = False
+            result["pdf_error"] = str(e)
+
+    summary = get_report_summary(cba_results, sensitivity_results, equity_results)
+    return {
+        "result": {k: v for k, v in result.items() if k != "_pdf_bytes"},
+        "summary": summary,
+        "_report_data": result,
+    }
+
+
+def _exec_analyze_dashcam(tool_input: dict) -> dict:
+    file_path = tool_input["file_path"]
+    media_type = tool_input.get("media_type", "image")
+    sample_interval = tool_input.get("sample_interval_sec", 5.0)
+    road_data = tool_input.get("_road_data")
+
+    result = analyze_dashcam_media(
+        file_path=file_path,
+        media_type=media_type,
+        road_data=road_data,
+        sample_interval_sec=sample_interval,
+    )
+
+    summary = get_dashcam_summary(result)
+    return {
+        "result": {k: v for k, v in result.items() if k != "segments"},
+        "summary": summary,
+        "_condition_data": result,
     }
 
 

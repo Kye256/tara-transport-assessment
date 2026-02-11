@@ -37,10 +37,11 @@ Kasangati-Matugga road, Wakiso District, Uganda (part of Kira-Kasangati-Matugga 
 - [x] CBA calculation engine
 - [x] Traffic forecasting
 - [x] Sensitivity analysis
-- [ ] Dashcam video analysis
-- [ ] Equity scoring
-- [ ] Report generation
-- [ ] WorldPop integration
+- [x] Dashcam video analysis
+- [x] Equity scoring
+- [x] Report generation
+- [x] Plotly charts (tornado, waterfall, cashflow, traffic, scenarios)
+- [x] WorldPop integration
 
 ## Build Priority
 1. Test OSM lookup works for Kasangati-Matugga road

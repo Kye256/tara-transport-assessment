@@ -8,6 +8,8 @@ Main Streamlit Application
 import streamlit as st
 import json
 import os
+import tempfile
+from datetime import datetime
 from dotenv import load_dotenv
 
 from skills.osm_lookup import search_road, get_road_summary
@@ -42,117 +44,37 @@ if "analysis_inputs" not in st.session_state:
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
 if "stage" not in st.session_state:
-    st.session_state.stage = "start"  # start → road_found → inputs → analysis → report
+    st.session_state.stage = "start"  # start -> road_found -> inputs -> analysis -> report
 if USE_AGENT and "agent_state" not in st.session_state:
     st.session_state.agent_state = create_agent()
 
 
-# --- Sidebar ---
-with st.sidebar:
-    st.image("https://img.icons8.com/color/96/road.png", width=60)
-    st.title("TARA")
-    st.caption("Transport Assessment & Road Appraisal")
-    st.markdown("---")
-
-    if USE_AGENT:
-        st.markdown("### Mode")
-        st.success("AI Agent (Opus 4.6)")
-
-    st.markdown("### Current Stage")
-    stages = {
-        "start": "🔍 Waiting for road name...",
-        "road_found": "🗺️ Road found — gathering data",
-        "inputs": "📝 Collecting inputs",
-        "analysis": "📊 Running analysis",
-        "report": "📄 Report ready",
-    }
-    st.info(stages.get(st.session_state.stage, "Unknown"))
-
-    if st.session_state.road_data and st.session_state.road_data.get("found"):
-        st.markdown("### Road Summary")
-        rd = st.session_state.road_data
-        st.metric("Length", f"{rd['total_length_km']} km")
-        st.metric("Segments", rd["segment_count"])
-        if rd["attributes"].get("surface_types"):
-            st.metric("Surface", ", ".join(rd["attributes"]["surface_types"]))
-
-    if st.session_state.facilities_data:
-        fd = st.session_state.facilities_data
-        st.markdown("### Nearby Facilities")
-        for cat, items in fd["facilities"].items():
-            if items:
-                st.metric(cat.title(), len(items))
-
-    st.markdown("---")
-    st.markdown(
-        "Built for the [Anthropic Claude Code Hackathon](https://cerebralvalley.ai/e/claude-code-hackathon) "
-        "| Feb 2026"
-    )
-
-
-# --- Main Chat Interface ---
-st.title("🛣️ TARA")
-st.markdown("*Transport Assessment & Road Appraisal — From road data to investment decision in minutes.*")
-st.markdown("---")
-
-# Display welcome message
-if not st.session_state.messages:
-    welcome = (
-        "Hello! I'm **TARA**, your Transport Assessment & Road Appraisal assistant.\n\n"
-        "Tell me the name of a road you'd like to appraise, and I'll:\n"
-        "1. Find it on OpenStreetMap and extract its geometry\n"
-        "2. Identify nearby health facilities, schools, and markets\n"
-        "3. Gather population and poverty data for the corridor\n"
-        "4. Help you run a full economic appraisal with sensitivity analysis\n\n"
-        "**Try:** *\"Appraise the Kasangati-Matugga road\"*"
-    )
-    st.session_state.messages.append({"role": "assistant", "content": welcome})
-
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-        # Display maps if attached to message
-        if message.get("maps"):
-            from streamlit_folium import st_folium
-            for m in message["maps"]:
-                st_folium(m, width=700, height=450, returned_objects=[])
-        elif message.get("map"):
-            from streamlit_folium import st_folium
-            st_folium(message["map"], width=700, height=450, returned_objects=[])
-
-
-# --- Chat Input ---
-if prompt := st.chat_input("Name a road to appraise (e.g., 'Kasangati-Matugga road')"):
-
-    # Add user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    if USE_AGENT:
-        _handle_agent_message(prompt)
-    else:
-        # Legacy direct-call flow
-        if st.session_state.stage == "start" or "appraise" in prompt.lower() or "road" in prompt.lower():
-            _handle_road_search(prompt)
-        elif st.session_state.stage == "inputs":
-            _handle_input_response(prompt)
-        else:
-            _handle_general_message(prompt)
-
-
-# --- Agent Message Handler ---
+# ============================================================
+# Handler Functions (defined before use)
+# ============================================================
 
 def _handle_agent_message(prompt: str):
     """Process a message through the Opus 4.6 agent."""
     with st.chat_message("assistant"):
-        with st.spinner("TARA is thinking..."):
+        with st.status("TARA is working...", expanded=True) as status:
+
+            def on_progress(event_type, data):
+                if event_type == "thinking":
+                    status.update(label="TARA is thinking...")
+                elif event_type == "tool_start":
+                    st.write(f"\u23f3 {data['input_summary']}")
+                elif event_type == "tool_done":
+                    summary = data.get("summary", "Done")
+                    st.write(f"\u2705 {summary[:120]}")
+                elif event_type == "continuing":
+                    status.update(label="TARA is thinking...")
+
             response_text, updated_state, maps = process_message_sync(
                 st.session_state.agent_state,
                 prompt,
+                on_progress=on_progress,
             )
+            status.update(label="Analysis complete", state="complete", expanded=False)
 
         st.markdown(response_text)
 
@@ -162,6 +84,50 @@ def _handle_agent_message(prompt: str):
             for m in maps:
                 st_folium(m, width=700, height=450, returned_objects=[])
 
+        # Display charts if CBA/sensitivity results are available
+        charts = []
+        if updated_state.get("cba_results") and updated_state.get("sensitivity_results"):
+            try:
+                from output.charts import (
+                    create_waterfall_chart,
+                    create_cashflow_chart,
+                    create_traffic_growth_chart,
+                    create_tornado_chart,
+                    create_scenario_chart,
+                )
+                cba = updated_state["cba_results"]
+                sens = updated_state["sensitivity_results"]
+
+                charts = [
+                    create_waterfall_chart(cba),
+                    create_tornado_chart(sens),
+                    create_traffic_growth_chart(cba),
+                    create_scenario_chart(sens),
+                    create_cashflow_chart(cba),
+                ]
+            except Exception:
+                pass
+
+        if charts:
+            st.markdown("### Analysis Charts")
+            cols = st.columns(2)
+            for i, chart in enumerate(charts):
+                with cols[i % 2]:
+                    st.plotly_chart(chart, use_container_width=True)
+
+        # PDF download inline
+        if updated_state.get("report_pdf"):
+            road_name = "Road"
+            if updated_state.get("road_data", {}).get("name"):
+                road_name = updated_state["road_data"]["name"].replace(" ", "_")
+            date_str = datetime.now().strftime("%Y%m%d")
+            st.download_button(
+                "Download Full Report (PDF)",
+                data=updated_state["report_pdf"],
+                file_name=f"TARA_Report_{road_name}_{date_str}.pdf",
+                mime="application/pdf",
+            )
+
         # Update session state from agent state
         st.session_state.agent_state = updated_state
 
@@ -170,22 +136,25 @@ def _handle_agent_message(prompt: str):
             st.session_state.stage = "road_found"
         if updated_state.get("facilities_data"):
             st.session_state.facilities_data = updated_state["facilities_data"]
+        if updated_state.get("population_data"):
+            st.session_state.population_data = updated_state["population_data"]
         if updated_state.get("cba_results"):
             st.session_state.analysis_results = updated_state["cba_results"]
             st.session_state.stage = "analysis"
+        if updated_state.get("report_pdf"):
+            st.session_state.stage = "report"
 
         # Store message
         msg_data = {"role": "assistant", "content": response_text}
         if maps:
             msg_data["maps"] = maps
+        if charts:
+            msg_data["charts"] = charts
         st.session_state.messages.append(msg_data)
 
 
-# --- Legacy Direct-Call Handlers ---
-
 def _handle_road_search(prompt: str):
     """Handle a road search request (legacy mode)."""
-
     with st.chat_message("assistant"):
         road_name = _extract_road_name(prompt)
 
@@ -241,7 +210,7 @@ def _handle_road_search(prompt: str):
             "2. **Construction cost** — Total cost or cost per km for the proposed improvement\n"
             "3. **Current condition** — Road roughness (IRI) or general condition (good/fair/poor)\n\n"
             "You can provide these now, or I can estimate them and you validate.\n\n"
-            "*Or upload a dashcam video and I'll assess the condition for you.*"
+            "*Or upload a dashcam video/image and I'll assess the condition for you.*"
         )
         st.markdown(next_msg)
 
@@ -295,14 +264,185 @@ def _extract_road_name(prompt: str) -> str:
     return prompt.strip()
 
 
+# ============================================================
+# Sidebar
+# ============================================================
+
+with st.sidebar:
+    st.image("https://img.icons8.com/color/96/road.png", width=60)
+    st.title("TARA")
+    st.caption("Transport Assessment & Road Appraisal")
+    st.markdown("---")
+
+    if USE_AGENT:
+        st.markdown("### Mode")
+        st.success("AI Agent (Opus 4.6)")
+
+    st.markdown("### Current Stage")
+    stages = {
+        "start": "🔍 Waiting for road name...",
+        "road_found": "🗺️ Road found — gathering data",
+        "inputs": "📝 Collecting inputs",
+        "analysis": "📊 Running analysis",
+        "report": "📄 Report ready",
+    }
+    st.info(stages.get(st.session_state.stage, "Unknown"))
+
+    if st.session_state.road_data and st.session_state.road_data.get("found"):
+        st.markdown("### Road Summary")
+        rd = st.session_state.road_data
+        st.metric("Length", f"{rd['total_length_km']} km")
+        st.metric("Segments", rd["segment_count"])
+        if rd["attributes"].get("surface_types"):
+            st.metric("Surface", ", ".join(rd["attributes"]["surface_types"]))
+
+    if st.session_state.facilities_data:
+        fd = st.session_state.facilities_data
+        st.markdown("### Nearby Facilities")
+        for cat, items in fd["facilities"].items():
+            if items:
+                st.metric(cat.title(), len(items))
+
+    if st.session_state.get("population_data") and st.session_state.population_data.get("found"):
+        pd_data = st.session_state.population_data
+        st.markdown("### Population (WorldPop)")
+        buf_5km = pd_data["buffers"].get("5.0km", pd_data["buffers"].get("5km"))
+        if buf_5km and buf_5km.get("population"):
+            st.metric("Corridor (5km)", f"{buf_5km['population']:,}")
+            st.metric("Density", f"{buf_5km['density_per_km2']:,.0f}/km²")
+        st.metric("Classification", pd_data.get("classification", "unknown").title())
+        pov = pd_data.get("poverty_estimate", {})
+        if pov.get("population_in_poverty"):
+            st.metric("Est. in Poverty", f"{pov['population_in_poverty']:,}")
+
+    # Equity score in sidebar
+    if USE_AGENT and st.session_state.get("agent_state", {}).get("equity_results"):
+        eq = st.session_state.agent_state["equity_results"]
+        st.markdown("### Equity Score")
+        st.metric("Overall", f"{eq['overall_score']}/100")
+        st.caption(eq.get("classification", ""))
+
+    # Condition score in sidebar
+    if USE_AGENT and st.session_state.get("agent_state", {}).get("condition_data"):
+        cd = st.session_state.agent_state["condition_data"]
+        if cd.get("found"):
+            st.markdown("### Road Condition")
+            st.metric("Score", f"{cd['overall_condition']}/100")
+            st.caption(f"Surface: {cd.get('surface_type', 'unknown').title()}")
+
+    # PDF download button
+    if USE_AGENT and st.session_state.get("agent_state", {}).get("report_pdf"):
+        st.markdown("### Report")
+        road_name = "Road"
+        if st.session_state.road_data and st.session_state.road_data.get("name"):
+            road_name = st.session_state.road_data["name"].replace(" ", "_")
+        date_str = datetime.now().strftime("%Y%m%d")
+        st.download_button(
+            "Download Report (PDF)",
+            data=st.session_state.agent_state["report_pdf"],
+            file_name=f"TARA_Report_{road_name}_{date_str}.pdf",
+            mime="application/pdf",
+        )
+
+    st.markdown("---")
+    st.markdown(
+        "Built for the [Anthropic Claude Code Hackathon](https://cerebralvalley.ai/e/claude-code-hackathon) "
+        "| Feb 2026"
+    )
+
+
+# ============================================================
+# Main Chat Interface
+# ============================================================
+
+st.title("🛣️ TARA")
+st.markdown("*Transport Assessment & Road Appraisal — From road data to investment decision in minutes.*")
+st.markdown("---")
+
+# Display welcome message
+if not st.session_state.messages:
+    welcome = (
+        "Hello! I'm **TARA**, your Transport Assessment & Road Appraisal assistant.\n\n"
+        "Tell me the name of a road you'd like to appraise, and I'll:\n"
+        "1. Find it on OpenStreetMap and extract its geometry\n"
+        "2. Identify nearby health facilities, schools, and markets\n"
+        "3. Gather population and poverty data for the corridor\n"
+        "4. Run a full economic appraisal with sensitivity analysis\n"
+        "5. Assess equity impact and generate a professional report\n\n"
+        "**Try:** *\"Appraise the Kasangati-Matugga road\"*"
+    )
+    st.session_state.messages.append({"role": "assistant", "content": welcome})
+
+# Display chat history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+        # Display maps if attached to message
+        if message.get("maps"):
+            from streamlit_folium import st_folium
+            for m in message["maps"]:
+                st_folium(m, width=700, height=450, returned_objects=[])
+        elif message.get("map"):
+            from streamlit_folium import st_folium
+            st_folium(message["map"], width=700, height=450, returned_objects=[])
+
+        # Display charts if attached to message
+        if message.get("charts"):
+            cols = st.columns(2)
+            for i, chart in enumerate(message["charts"]):
+                with cols[i % 2]:
+                    st.plotly_chart(chart, use_container_width=True)
+
+
+# --- Chat Input ---
+if prompt := st.chat_input("Name a road to appraise (e.g., 'Kasangati-Matugga road')"):
+
+    # Add user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    if USE_AGENT:
+        _handle_agent_message(prompt)
+    else:
+        # Legacy direct-call flow
+        if st.session_state.stage == "start" or "appraise" in prompt.lower() or "road" in prompt.lower():
+            _handle_road_search(prompt)
+        elif st.session_state.stage == "inputs":
+            _handle_input_response(prompt)
+        else:
+            _handle_general_message(prompt)
+
+
 # --- File Upload for Dashcam ---
-if st.session_state.stage in ["road_found", "inputs"]:
+if st.session_state.stage in ["road_found", "inputs", "analysis"]:
     st.markdown("---")
     uploaded_file = st.file_uploader(
-        "📹 Upload dashcam video for condition assessment",
-        type=["mp4", "avi", "mov", "mkv"],
-        help="Upload a drive-through video recorded from your dashboard. TARA will analyse road condition."
+        "📹 Upload dashcam video or image for condition assessment",
+        type=["mp4", "avi", "mov", "mkv", "jpg", "jpeg", "png"],
+        help="Upload a drive-through video or road photo. TARA will analyse road condition using Vision AI."
     )
     if uploaded_file:
-        st.info("📹 Video uploaded! Condition analysis will be available in Day 3 build.")
-        # TODO: Process video with Claude Vision
+        # Determine media type
+        ext = uploaded_file.name.split(".")[-1].lower()
+        if ext in ("jpg", "jpeg", "png"):
+            media_type = "image"
+        else:
+            media_type = "video"
+
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
+
+        st.info(f"📹 {media_type.title()} uploaded! Triggering condition analysis...")
+
+        if USE_AGENT:
+            # Inject a message to trigger dashcam analysis
+            dashcam_prompt = (
+                f"Please analyse this dashcam {media_type} for road condition. "
+                f"The file is saved at: {tmp_path}"
+            )
+            st.session_state.messages.append({"role": "user", "content": f"[Uploaded {media_type}: {uploaded_file.name}]"})
+            _handle_agent_message(dashcam_prompt)
