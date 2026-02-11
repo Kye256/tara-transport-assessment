@@ -1,448 +1,1182 @@
 """
 TARA: Transport Assessment & Road Appraisal
-Main Streamlit Application
+Main Dash Application — 7-step wizard with persistent map.
 
 "From road data to investment decision — in minutes, not months."
 """
 
-import streamlit as st
 import json
 import os
+import base64
+import copy
 import tempfile
 from datetime import datetime
+from typing import Optional
+
 from dotenv import load_dotenv
 
-from skills.osm_lookup import search_road, get_road_summary
-from skills.osm_facilities import find_facilities, get_facilities_summary, calculate_distances_to_road
-from output.maps import create_road_map
+import dash
+from dash import html, dcc, Input, Output, State, callback, no_update, ctx
+import dash_bootstrap_components as dbc
+import dash_leaflet as dl
 
 load_dotenv()
 
-# Check if agent mode is enabled (default: True)
-USE_AGENT = os.environ.get("USE_AGENT", "true").lower() in ("true", "1", "yes")
-
-if USE_AGENT:
-    from agent.orchestrator import create_agent, process_message_sync
-
-# --- Page Config ---
-st.set_page_config(
-    page_title="TARA — Transport Assessment & Road Appraisal",
-    page_icon="🛣️",
-    layout="wide",
-    initial_sidebar_state="expanded",
+from config.parameters import (
+    EOCK,
+    ANALYSIS_PERIOD,
+    BASE_YEAR,
+    DEFAULT_TRAFFIC_GROWTH_RATE,
+    DEFAULT_CONSTRUCTION_YEARS,
+    VEHICLE_CLASSES,
+    VEHICLE_CLASS_LABELS,
+    CONSTRUCTION_COST_BENCHMARKS,
+    MAINTENANCE_COSTS,
+    SENSITIVITY_VARIABLES,
 )
 
-# --- Session State Initialization ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "road_data" not in st.session_state:
-    st.session_state.road_data = None
-if "facilities_data" not in st.session_state:
-    st.session_state.facilities_data = None
-if "analysis_inputs" not in st.session_state:
-    st.session_state.analysis_inputs = {}
-if "analysis_results" not in st.session_state:
-    st.session_state.analysis_results = None
-if "stage" not in st.session_state:
-    st.session_state.stage = "start"  # start -> road_found -> inputs -> analysis -> report
-if USE_AGENT and "agent_state" not in st.session_state:
-    st.session_state.agent_state = create_agent()
+# ============================================================
+# App Setup
+# ============================================================
+
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.FLATLY],
+    suppress_callback_exceptions=True,
+    title="TARA — Transport Assessment & Road Appraisal",
+)
+server = app.server
+
+STEP_LABELS = [
+    "Select Road",
+    "Condition",
+    "Traffic",
+    "Costs",
+    "Results",
+    "Sensitivity",
+    "Report",
+]
+
+# Default Uganda traffic split
+DEFAULT_SPLIT = {"Cars": 0.55, "Buses_LGV": 0.25, "HGV": 0.15, "Semi_Trailers": 0.05}
+DEFAULT_ADT = 3000
 
 
 # ============================================================
-# Handler Functions (defined before use)
+# Helpers
 # ============================================================
 
-def _handle_agent_message(prompt: str):
-    """Process a message through the Opus 4.6 agent."""
-    with st.chat_message("assistant"):
-        with st.status("TARA is working...", expanded=True) as status:
-
-            def on_progress(event_type, data):
-                if event_type == "thinking":
-                    status.update(label="TARA is thinking...")
-                elif event_type == "tool_start":
-                    st.write(f"\u23f3 {data['input_summary']}")
-                elif event_type == "tool_done":
-                    summary = data.get("summary", "Done")
-                    st.write(f"\u2705 {summary[:120]}")
-                elif event_type == "continuing":
-                    status.update(label="TARA is thinking...")
-
-            response_text, updated_state, maps = process_message_sync(
-                st.session_state.agent_state,
-                prompt,
-                on_progress=on_progress,
-            )
-            status.update(label="Analysis complete", state="complete", expanded=False)
-
-        st.markdown(response_text)
-
-        # Display any maps returned
-        if maps:
-            from streamlit_folium import st_folium
-            for m in maps:
-                st_folium(m, width=700, height=450, returned_objects=[])
-
-        # Display charts if CBA/sensitivity results are available
-        charts = []
-        if updated_state.get("cba_results") and updated_state.get("sensitivity_results"):
-            try:
-                from output.charts import (
-                    create_waterfall_chart,
-                    create_cashflow_chart,
-                    create_traffic_growth_chart,
-                    create_tornado_chart,
-                    create_scenario_chart,
-                )
-                cba = updated_state["cba_results"]
-                sens = updated_state["sensitivity_results"]
-
-                charts = [
-                    create_waterfall_chart(cba),
-                    create_tornado_chart(sens),
-                    create_traffic_growth_chart(cba),
-                    create_scenario_chart(sens),
-                    create_cashflow_chart(cba),
-                ]
-            except Exception:
-                pass
-
-        if charts:
-            st.markdown("### Analysis Charts")
-            cols = st.columns(2)
-            for i, chart in enumerate(charts):
-                with cols[i % 2]:
-                    st.plotly_chart(chart, use_container_width=True)
-
-        # PDF download inline
-        if updated_state.get("report_pdf"):
-            road_name = "Road"
-            if updated_state.get("road_data", {}).get("name"):
-                road_name = updated_state["road_data"]["name"].replace(" ", "_")
-            date_str = datetime.now().strftime("%Y%m%d")
-            st.download_button(
-                "Download Full Report (PDF)",
-                data=updated_state["report_pdf"],
-                file_name=f"TARA_Report_{road_name}_{date_str}.pdf",
-                mime="application/pdf",
-            )
-
-        # Update session state from agent state
-        st.session_state.agent_state = updated_state
-
-        if updated_state.get("road_data"):
-            st.session_state.road_data = updated_state["road_data"]
-            st.session_state.stage = "road_found"
-        if updated_state.get("facilities_data"):
-            st.session_state.facilities_data = updated_state["facilities_data"]
-        if updated_state.get("population_data"):
-            st.session_state.population_data = updated_state["population_data"]
-        if updated_state.get("cba_results"):
-            st.session_state.analysis_results = updated_state["cba_results"]
-            st.session_state.stage = "analysis"
-        if updated_state.get("report_pdf"):
-            st.session_state.stage = "report"
-
-        # Store message
-        msg_data = {"role": "assistant", "content": response_text}
-        if maps:
-            msg_data["maps"] = maps
-        if charts:
-            msg_data["charts"] = charts
-        st.session_state.messages.append(msg_data)
-
-
-def _handle_road_search(prompt: str):
-    """Handle a road search request (legacy mode)."""
-    with st.chat_message("assistant"):
-        road_name = _extract_road_name(prompt)
-
-        st.markdown(f"🔍 Searching for **{road_name}** on OpenStreetMap...")
-
-        with st.spinner("Querying OpenStreetMap..."):
-            road_data = search_road(road_name, "Uganda")
-
-        if not road_data.get("found"):
-            msg = (
-                f"I couldn't find **{road_name}** on OpenStreetMap. "
-                "Could you try:\n"
-                "- A more specific name (e.g., 'Kira-Kasangati-Matugga road')\n"
-                "- Including nearby towns\n"
-                "- The road number if it has one"
-            )
-            st.markdown(msg)
-            st.session_state.messages.append({"role": "assistant", "content": msg})
-            return
-
-        st.session_state.road_data = road_data
-
-        summary = get_road_summary(road_data)
-        st.markdown("✅ **Road found!**\n\n" + summary)
-
-        st.markdown("\n🏥 Searching for nearby facilities...")
-        with st.spinner("Finding health centres, schools, markets..."):
-            facilities_data = find_facilities(road_data["bbox"], buffer_km=3.0)
-
-            for cat, items in facilities_data["facilities"].items():
-                if items and road_data.get("coordinates_all"):
-                    facilities_data["facilities"][cat] = calculate_distances_to_road(
-                        items, road_data["coordinates_all"]
-                    )
-
-        st.session_state.facilities_data = facilities_data
-
-        fac_summary = get_facilities_summary(facilities_data)
-        st.markdown(fac_summary)
-
-        road_map = create_road_map(road_data, facilities_data)
-        from streamlit_folium import st_folium
-        st_folium(road_map, width=700, height=450, returned_objects=[])
-
-        next_msg = (
-            "\n---\n"
-            "### What I found\n"
-            f"I've identified the road ({road_data['total_length_km']}km) and "
-            f"found {facilities_data['total_count']} facilities within 3km of the corridor.\n\n"
-            "### What I need from you\n"
-            "To run the economic appraisal, I need:\n"
-            "1. **Traffic count** — Average Daily Traffic by vehicle class (or total ADT)\n"
-            "2. **Construction cost** — Total cost or cost per km for the proposed improvement\n"
-            "3. **Current condition** — Road roughness (IRI) or general condition (good/fair/poor)\n\n"
-            "You can provide these now, or I can estimate them and you validate.\n\n"
-            "*Or upload a dashcam video/image and I'll assess the condition for you.*"
-        )
-        st.markdown(next_msg)
-
-        full_msg = f"✅ **Road found!**\n\n{summary}\n\n{fac_summary}\n{next_msg}"
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": full_msg,
-            "map": road_map,
-        })
-
-        st.session_state.stage = "road_found"
-
-
-def _handle_input_response(prompt: str):
-    """Handle user providing analysis inputs (legacy mode)."""
-    with st.chat_message("assistant"):
-        st.markdown("Thank you! Let me process those inputs and run the analysis...")
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": "Thank you! Processing inputs... (Use agent mode for full analysis)"
-        })
-
-
-def _handle_general_message(prompt: str):
-    """Handle general conversation (legacy mode)."""
-    with st.chat_message("assistant"):
-        msg = "I'm ready to help with road appraisal. Tell me a road name to get started!"
-        st.markdown(msg)
-        st.session_state.messages.append({"role": "assistant", "content": msg})
-
-
-def _extract_road_name(prompt: str) -> str:
-    """Extract road name from a natural language prompt."""
-    lower = prompt.lower()
-    for prefix in ["appraise the", "appraise", "assess the", "assess",
-                    "find the", "find", "search for", "look up", "analyse the",
-                    "analyze the"]:
-        if lower.startswith(prefix):
-            prompt = prompt[len(prefix):].strip()
-            break
-
-    for suffix in [" road upgrade", " upgrade", " improvement", " project",
-                   " rehabilitation", " please", " for me"]:
-        if prompt.lower().endswith(suffix):
-            prompt = prompt[:-len(suffix)].strip()
-            break
-
-    if "road" not in prompt.lower() and "highway" not in prompt.lower():
-        prompt = prompt + " road"
-
-    return prompt.strip()
-
-
-# ============================================================
-# Sidebar
-# ============================================================
-
-with st.sidebar:
-    st.image("https://img.icons8.com/color/96/road.png", width=60)
-    st.title("TARA")
-    st.caption("Transport Assessment & Road Appraisal")
-    st.markdown("---")
-
-    if USE_AGENT:
-        st.markdown("### Mode")
-        st.success("AI Agent (Opus 4.6)")
-
-    st.markdown("### Current Stage")
-    stages = {
-        "start": "🔍 Waiting for road name...",
-        "road_found": "🗺️ Road found — gathering data",
-        "inputs": "📝 Collecting inputs",
-        "analysis": "📊 Running analysis",
-        "report": "📄 Report ready",
-    }
-    st.info(stages.get(st.session_state.stage, "Unknown"))
-
-    if st.session_state.road_data and st.session_state.road_data.get("found"):
-        st.markdown("### Road Summary")
-        rd = st.session_state.road_data
-        st.metric("Length", f"{rd['total_length_km']} km")
-        st.metric("Segments", rd["segment_count"])
-        if rd["attributes"].get("surface_types"):
-            st.metric("Surface", ", ".join(rd["attributes"]["surface_types"]))
-
-    if st.session_state.facilities_data:
-        fd = st.session_state.facilities_data
-        st.markdown("### Nearby Facilities")
-        for cat, items in fd["facilities"].items():
-            if items:
-                st.metric(cat.title(), len(items))
-
-    if st.session_state.get("population_data") and st.session_state.population_data.get("found"):
-        pd_data = st.session_state.population_data
-        st.markdown("### Population (WorldPop)")
-        buf_5km = pd_data["buffers"].get("5.0km", pd_data["buffers"].get("5km"))
-        if buf_5km and buf_5km.get("population"):
-            st.metric("Corridor (5km)", f"{buf_5km['population']:,}")
-            st.metric("Density", f"{buf_5km['density_per_km2']:,.0f}/km²")
-        st.metric("Classification", pd_data.get("classification", "unknown").title())
-        pov = pd_data.get("poverty_estimate", {})
-        if pov.get("population_in_poverty"):
-            st.metric("Est. in Poverty", f"{pov['population_in_poverty']:,}")
-
-    # Equity score in sidebar
-    if USE_AGENT and st.session_state.get("agent_state", {}).get("equity_results"):
-        eq = st.session_state.agent_state["equity_results"]
-        st.markdown("### Equity Score")
-        st.metric("Overall", f"{eq['overall_score']}/100")
-        st.caption(eq.get("classification", ""))
-
-    # Condition score in sidebar
-    if USE_AGENT and st.session_state.get("agent_state", {}).get("condition_data"):
-        cd = st.session_state.agent_state["condition_data"]
-        if cd.get("found"):
-            st.markdown("### Road Condition")
-            st.metric("Score", f"{cd['overall_condition']}/100")
-            st.caption(f"Surface: {cd.get('surface_type', 'unknown').title()}")
-
-    # PDF download button
-    if USE_AGENT and st.session_state.get("agent_state", {}).get("report_pdf"):
-        st.markdown("### Report")
-        road_name = "Road"
-        if st.session_state.road_data and st.session_state.road_data.get("name"):
-            road_name = st.session_state.road_data["name"].replace(" ", "_")
-        date_str = datetime.now().strftime("%Y%m%d")
-        st.download_button(
-            "Download Report (PDF)",
-            data=st.session_state.agent_state["report_pdf"],
-            file_name=f"TARA_Report_{road_name}_{date_str}.pdf",
-            mime="application/pdf",
-        )
-
-    st.markdown("---")
-    st.markdown(
-        "Built for the [Anthropic Claude Code Hackathon](https://cerebralvalley.ai/e/claude-code-hackathon) "
-        "| Feb 2026"
+def _metric_card(title: str, value: str, color: str = "primary") -> dbc.Card:
+    """Build a small metric card."""
+    return dbc.Card(
+        dbc.CardBody([
+            html.H5(value, className=f"mb-0 text-{color}"),
+            html.Small(title, className="text-muted"),
+        ], className="py-2"),
+        className="text-center",
     )
 
 
+def _make_serializable(obj):
+    """Make an object JSON-serializable for dcc.Store."""
+    if obj is None:
+        return None
+    try:
+        json.dumps(obj)
+        return obj
+    except (TypeError, ValueError):
+        return json.loads(json.dumps(obj, default=str))
+
+
 # ============================================================
-# Main Chat Interface
+# Step Indicator
 # ============================================================
 
-st.title("🛣️ TARA")
-st.markdown("*Transport Assessment & Road Appraisal — From road data to investment decision in minutes.*")
-st.markdown("---")
+def make_step_indicator(active_step: int = 1) -> html.Div:
+    """Build a horizontal step indicator (1-7)."""
+    items = []
+    for i, label in enumerate(STEP_LABELS, 1):
+        if i < active_step:
+            badge_cls = "bg-success"
+        elif i == active_step:
+            badge_cls = "bg-primary"
+        else:
+            badge_cls = "bg-secondary"
 
-# Display welcome message
-if not st.session_state.messages:
-    welcome = (
-        "Hello! I'm **TARA**, your Transport Assessment & Road Appraisal assistant.\n\n"
-        "Tell me the name of a road you'd like to appraise, and I'll:\n"
-        "1. Find it on OpenStreetMap and extract its geometry\n"
-        "2. Identify nearby health facilities, schools, and markets\n"
-        "3. Gather population and poverty data for the corridor\n"
-        "4. Run a full economic appraisal with sensitivity analysis\n"
-        "5. Assess equity impact and generate a professional report\n\n"
-        "**Try:** *\"Appraise the Kasangati-Matugga road\"*"
+        items.append(
+            html.Div(
+                [
+                    html.Span(
+                        str(i),
+                        className=f"badge rounded-pill {badge_cls} me-1",
+                        style={"fontSize": "0.75rem"},
+                    ),
+                    html.Small(label, className="d-none d-md-inline"),
+                ],
+                className="d-flex align-items-center me-2",
+            )
+        )
+        if i < len(STEP_LABELS):
+            items.append(
+                html.Span("\u2014", className="text-muted me-2", style={"fontSize": "0.7rem"})
+            )
+
+    return html.Div(items, className="d-flex flex-wrap align-items-center mb-3")
+
+
+# ============================================================
+# Step Content Builders
+# ============================================================
+
+def build_step1():
+    return dbc.Card(dbc.CardBody([
+        html.H5("Step 1: Select Road", className="card-title"),
+        html.P("Search for a road on OpenStreetMap.", className="text-muted"),
+        dbc.InputGroup([
+            dbc.Input(
+                id="road-search-input",
+                placeholder="e.g. Kasangati-Matugga road",
+                type="text",
+                debounce=True,
+            ),
+            dbc.Button("Search", id="road-search-btn", color="primary"),
+        ], className="mb-3"),
+        dbc.Select(
+            id="country-select",
+            options=[
+                {"label": "Uganda", "value": "Uganda"},
+                {"label": "Kenya", "value": "Kenya"},
+                {"label": "Tanzania", "value": "Tanzania"},
+                {"label": "Rwanda", "value": "Rwanda"},
+                {"label": "Ethiopia", "value": "Ethiopia"},
+            ],
+            value="Uganda",
+            className="mb-3",
+            style={"maxWidth": "200px"},
+        ),
+        html.Div(id="road-candidates-area"),
+        dcc.Loading(type="circle", children=
+            dbc.RadioItems(
+                id="road-candidate-radio", options=[],
+                className="mb-2",
+                labelStyle={"display": "block", "cursor": "pointer", "padding": "4px 0"},
+            ),
+        ),
+        html.Div(id="road-search-result"),
+    ]), className="mb-3")
+
+
+def build_step2():
+    return dbc.Card(dbc.CardBody([
+        html.H5("Step 2: Road Condition", className="card-title"),
+        html.P("Describe the current road condition.", className="text-muted"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Label("Surface Type"),
+                dbc.Select(
+                    id="surface-type-select",
+                    options=[
+                        {"label": "Asphalt", "value": "asphalt"},
+                        {"label": "Gravel", "value": "gravel"},
+                        {"label": "Earth/Dirt", "value": "earth"},
+                        {"label": "Concrete", "value": "concrete"},
+                        {"label": "Compacted", "value": "compacted"},
+                    ],
+                    value="gravel",
+                ),
+            ], md=6),
+            dbc.Col([
+                dbc.Label("Condition Rating"),
+                dbc.Select(
+                    id="condition-rating-select",
+                    options=[
+                        {"label": "Good (IRI 2-4)", "value": "good"},
+                        {"label": "Fair (IRI 4-8)", "value": "fair"},
+                        {"label": "Poor (IRI 8-14)", "value": "poor"},
+                        {"label": "Very Poor (IRI 14+)", "value": "very_poor"},
+                    ],
+                    value="poor",
+                ),
+            ], md=6),
+        ], className="mb-3"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Label("IRI (m/km) \u2014 optional override"),
+                dbc.Input(id="iri-input", type="number", placeholder="e.g. 10",
+                          min=1, max=30, step=0.5),
+            ], md=6),
+        ], className="mb-3"),
+        html.Hr(),
+        html.P("Or upload a dashcam image/video:", className="text-muted"),
+        dcc.Upload(
+            id="dashcam-upload",
+            children=dbc.Button("Upload Dashcam File", color="outline-secondary", size="sm"),
+            accept=".jpg,.jpeg,.png,.mp4,.avi,.mov",
+            className="mb-2",
+        ),
+        html.Div(id="dashcam-result"),
+    ]), className="mb-3")
+
+
+def build_step3():
+    rows = []
+    for vc in VEHICLE_CLASSES:
+        label = VEHICLE_CLASS_LABELS[vc]
+        pct = DEFAULT_SPLIT[vc]
+        adt_val = int(DEFAULT_ADT * pct)
+        rows.append(dbc.Row([
+            dbc.Col(html.Small(label), md=5),
+            dbc.Col(
+                dbc.Input(id={"type": "traffic-adt", "vc": vc}, type="number",
+                          value=adt_val, min=0, step=10, size="sm"),
+                md=3,
+            ),
+            dbc.Col(
+                dbc.Input(id={"type": "traffic-pct", "vc": vc}, type="number",
+                          value=round(pct * 100, 1), min=0, max=100, step=0.1, size="sm"),
+                md=3,
+            ),
+        ], className="mb-1"))
+
+    return dbc.Card(dbc.CardBody([
+        html.H5("Step 3: Traffic", className="card-title"),
+        html.P("Enter average daily traffic by vehicle class.", className="text-muted"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Label("Total ADT (vehicles/day)"),
+                dbc.Input(id="total-adt-input", type="number",
+                          value=DEFAULT_ADT, min=100, step=100),
+            ], md=6),
+            dbc.Col([
+                dbc.Label("Growth Rate (% p.a.)"),
+                dbc.Input(id="growth-rate-input", type="number",
+                          value=round(DEFAULT_TRAFFIC_GROWTH_RATE * 100, 1),
+                          min=0, max=15, step=0.1),
+            ], md=6),
+        ], className="mb-3"),
+        html.H6("Vehicle Class Breakdown"),
+        dbc.Row([
+            dbc.Col(html.Small("Class", className="fw-bold"), md=5),
+            dbc.Col(html.Small("ADT", className="fw-bold"), md=3),
+            dbc.Col(html.Small("Share %", className="fw-bold"), md=3),
+        ], className="mb-1"),
+        *rows,
+    ]), className="mb-3")
+
+
+def build_step4():
+    return dbc.Card(dbc.CardBody([
+        html.H5("Step 4: Costs", className="card-title"),
+        html.P("Enter project costs and timing.", className="text-muted"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Label("Total Construction Cost (USD)"),
+                dbc.Input(id="total-cost-input", type="number",
+                          value=5_000_000, min=100_000, step=100_000),
+            ], md=6),
+            dbc.Col([
+                dbc.Label("Cost per km (auto-calculated)"),
+                html.Div(id="cost-per-km-display", className="form-control-plaintext"),
+            ], md=6),
+        ], className="mb-3"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Label("Construction Period (years)"),
+                dbc.Input(id="construction-years-input", type="number",
+                          value=DEFAULT_CONSTRUCTION_YEARS, min=1, max=10, step=1),
+            ], md=6),
+            dbc.Col([
+                dbc.Label("Discount Rate (%)"),
+                dbc.Input(id="discount-rate-input", type="number",
+                          value=round(EOCK * 100, 1), min=1, max=25, step=0.5),
+            ], md=6),
+        ], className="mb-3"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Label("Analysis Period (years)"),
+                dbc.Input(id="analysis-period-input", type="number",
+                          value=ANALYSIS_PERIOD, min=10, max=40, step=1),
+            ], md=6),
+            dbc.Col([
+                dbc.Label("Base Year"),
+                dbc.Input(id="base-year-input", type="number",
+                          value=BASE_YEAR, min=2020, max=2035, step=1),
+            ], md=6),
+        ], className="mb-3"),
+    ]), className="mb-3")
+
+
+def build_step5():
+    return dbc.Card(dbc.CardBody([
+        html.H5("Step 5: Results", className="card-title"),
+        html.P("Run the cost-benefit analysis.", className="text-muted"),
+        dbc.Button("Run Appraisal", id="run-cba-btn", color="success",
+                    size="lg", className="mb-3"),
+        dcc.Loading(type="default", children=html.Div(id="cba-results-area")),
+    ]), className="mb-3")
+
+
+def build_step6():
+    return dbc.Card(dbc.CardBody([
+        html.H5("Step 6: Sensitivity Analysis", className="card-title"),
+        html.P("Adjust parameters and see how results change.", className="text-muted"),
+        html.Div(id="sensitivity-controls"),
+        dcc.Loading(type="default", children=html.Div(id="sensitivity-results-area")),
+        html.Hr(),
+        dbc.Button("AI Interpretation", id="ai-interpret-btn", color="info",
+                    outline=True, size="sm", className="mb-2"),
+        dcc.Loading(type="circle", children=html.Div(id="ai-narrative")),
+    ]), className="mb-3")
+
+
+def build_step7():
+    return dbc.Card(dbc.CardBody([
+        html.H5("Step 7: Report", className="card-title"),
+        html.P("Generate and download the appraisal report.", className="text-muted"),
+        dbc.Row([
+            dbc.Col(
+                dbc.Button("Generate PDF Report", id="gen-pdf-btn",
+                            color="primary", className="me-2"),
+                width="auto",
+            ),
+            dbc.Col(
+                dbc.Button("Export CSV Data", id="gen-csv-btn",
+                            color="outline-secondary"),
+                width="auto",
+            ),
+        ], className="mb-3"),
+        dcc.Loading(type="circle", children=html.Div(id="report-result-area")),
+        dcc.Download(id="download-pdf"),
+        dcc.Download(id="download-csv"),
+        html.Div(id="report-summary"),
+    ]), className="mb-3")
+
+
+# Pre-build all steps so component IDs exist in the layout
+ALL_STEPS = {
+    1: build_step1(),
+    2: build_step2(),
+    3: build_step3(),
+    4: build_step4(),
+    5: build_step5(),
+    6: build_step6(),
+    7: build_step7(),
+}
+
+
+# ============================================================
+# Main Layout
+# ============================================================
+
+app.layout = dbc.Container([
+    # Stores
+    dcc.Store(id="current-step-store", data=1),
+    dcc.Store(id="road-candidates-store", data=None),
+    dcc.Store(id="road-data-store", data=None),
+    dcc.Store(id="facilities-data-store", data=None),
+    dcc.Store(id="condition-store", data=None),
+    dcc.Store(id="traffic-store", data=None),
+    dcc.Store(id="cost-store", data=None),
+    dcc.Store(id="results-store", data=None),
+    dcc.Store(id="sensitivity-store", data=None),
+    dcc.Store(id="population-store", data=None),
+    dcc.Store(id="equity-store", data=None),
+    dcc.Store(id="cba-inputs-store", data=None),
+
+    # Header
+    dbc.Navbar(
+        dbc.Container([
+            dbc.NavbarBrand([
+                html.Span("TARA", className="fw-bold", style={"fontSize": "1.4rem"}),
+                html.Small(
+                    " \u2014 Transport Assessment & Road Appraisal",
+                    className="text-muted ms-2 d-none d-md-inline",
+                ),
+            ]),
+            html.Small("Built with Claude Opus 4.6", className="text-muted d-none d-md-block"),
+        ]),
+        color="white",
+        className="border-bottom mb-3",
+    ),
+
+    # Two-panel layout
+    dbc.Row([
+        # Left: Wizard
+        dbc.Col([
+            html.Div(id="step-indicator"),
+            # All steps are rendered but hidden via display style
+            *[
+                html.Div(step, id=f"step-panel-{i}", style={"display": "block" if i == 1 else "none"})
+                for i, step in ALL_STEPS.items()
+            ],
+            # Nav buttons
+            dbc.Row([
+                dbc.Col(
+                    dbc.Button("\u2190 Back", id="back-btn", color="secondary",
+                               outline=True, className="w-100"),
+                    width=4,
+                ),
+                dbc.Col(width=4),
+                dbc.Col(
+                    dbc.Button("Next \u2192", id="next-btn", color="primary",
+                               className="w-100"),
+                    width=4,
+                ),
+            ], className="mt-3"),
+        ], md=5, lg=4, style={"overflowY": "auto", "maxHeight": "calc(100vh - 80px)",
+                               "paddingRight": "12px"}),
+
+        # Right: Map + Results
+        dbc.Col([
+            html.Div(
+                dl.Map(
+                    id="main-map",
+                    children=[dl.TileLayer()],
+                    center=[0.35, 32.58],
+                    zoom=10,
+                    style={"height": "45vh", "width": "100%", "borderRadius": "8px"},
+                ),
+                className="mb-3",
+            ),
+            html.Div(id="right-panel-results"),
+        ], md=7, lg=8),
+    ]),
+
+    # Footer
+    html.Hr(className="mt-4"),
+    html.Footer(
+        html.Small(
+            "Built for the Anthropic Claude Code Hackathon | Feb 2026",
+            className="text-muted",
+        ),
+        className="text-center mb-3",
+    ),
+], fluid=True)
+
+
+# ============================================================
+# Callbacks
+# ============================================================
+
+# --- Step Navigation ---
+
+@callback(
+    Output("current-step-store", "data"),
+    Input("back-btn", "n_clicks"),
+    Input("next-btn", "n_clicks"),
+    State("current-step-store", "data"),
+    prevent_initial_call=True,
+)
+def navigate_steps(back_clicks, next_clicks, current_step):
+    trigger = ctx.triggered_id
+    if trigger == "back-btn" and current_step > 1:
+        return current_step - 1
+    elif trigger == "next-btn" and current_step < 7:
+        return current_step + 1
+    return no_update
+
+
+@callback(
+    Output("step-indicator", "children"),
+    Output("back-btn", "disabled"),
+    Output("next-btn", "disabled"),
+    *[Output(f"step-panel-{i}", "style") for i in range(1, 8)],
+    Input("current-step-store", "data"),
+)
+def update_step_display(current_step):
+    indicator = make_step_indicator(current_step)
+    back_disabled = current_step <= 1
+    next_disabled = current_step >= 7
+    styles = [
+        {"display": "block"} if i == current_step else {"display": "none"}
+        for i in range(1, 8)
+    ]
+    return indicator, back_disabled, next_disabled, *styles
+
+
+# --- Step 1: Road Search (phase 1 — find candidates) ---
+
+@callback(
+    Output("road-candidates-area", "children"),
+    Output("road-candidate-radio", "options"),
+    Output("road-candidate-radio", "value"),
+    Output("road-candidates-store", "data"),
+    Output("road-search-result", "children", allow_duplicate=True),
+    Input("road-search-btn", "n_clicks"),
+    Input("road-search-input", "n_submit"),
+    State("road-search-input", "value"),
+    State("country-select", "value"),
+    prevent_initial_call=True,
+)
+def search_road_candidates(n_clicks, n_submit, road_name, country):
+    if not road_name:
+        return (
+            dbc.Alert("Please enter a road name.", color="warning"),
+            no_update, no_update, no_update, no_update,
+        )
+
+    from skills.osm_lookup import search_roads_multi
+
+    candidates = search_roads_multi(road_name, country)
+
+    if not candidates:
+        return (
+            dbc.Alert([
+                html.Strong("No roads found. "),
+                "Try a more specific name or include nearby towns.",
+            ], color="danger"),
+            [], None, None, html.Div(),
+        )
+
+    # Build radio options
+    options = []
+    for i, c in enumerate(candidates):
+        hw = ", ".join(c["highway_types"]) if c["highway_types"] else "road"
+        label = f"{c['name']}  —  {c['total_length_km']} km, {hw} ({c['segment_count']} segments)"
+        options.append({"label": label, "value": i})
+
+    # Auto-select if only 1 candidate
+    if len(candidates) == 1:
+        return (
+            html.Div(),
+            options,
+            0,  # auto-select first (triggers select callback)
+            _make_serializable(candidates),
+            html.Div(),
+        )
+
+    return (
+        dbc.Alert(
+            f"Found {len(candidates)} matching roads. Select one:",
+            color="info", className="py-2 mb-0",
+        ),
+        options,
+        None,  # no selection yet — user picks
+        _make_serializable(candidates),
+        html.Div(),
     )
-    st.session_state.messages.append({"role": "assistant", "content": welcome})
-
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-        # Display maps if attached to message
-        if message.get("maps"):
-            from streamlit_folium import st_folium
-            for m in message["maps"]:
-                st_folium(m, width=700, height=450, returned_objects=[])
-        elif message.get("map"):
-            from streamlit_folium import st_folium
-            st_folium(message["map"], width=700, height=450, returned_objects=[])
-
-        # Display charts if attached to message
-        if message.get("charts"):
-            cols = st.columns(2)
-            for i, chart in enumerate(message["charts"]):
-                with cols[i % 2]:
-                    st.plotly_chart(chart, use_container_width=True)
 
 
-# --- Chat Input ---
-if prompt := st.chat_input("Name a road to appraise (e.g., 'Kasangati-Matugga road')"):
+# --- Step 1: Road Selection (phase 2 — load chosen candidate) ---
 
-    # Add user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+@callback(
+    Output("road-search-result", "children"),
+    Output("road-data-store", "data"),
+    Output("facilities-data-store", "data"),
+    Output("main-map", "children"),
+    Output("main-map", "center"),
+    Output("main-map", "zoom"),
+    Output("main-map", "bounds"),
+    Input("road-candidate-radio", "value"),
+    State("road-candidates-store", "data"),
+    prevent_initial_call=True,
+)
+def select_road_candidate(selected_idx, candidates):
+    if selected_idx is None or candidates is None:
+        return (no_update,) * 7
 
-    if USE_AGENT:
-        _handle_agent_message(prompt)
+    candidate = candidates[selected_idx]
+
+    from skills.osm_lookup import load_road_by_ids
+    from skills.osm_facilities import (
+        find_facilities, calculate_distances_to_road,
+    )
+    from output.maps import create_road_map
+
+    element_ids = candidate.get("element_ids", [])
+    road_name = candidate["name"]
+
+    if element_ids and candidate.get("source") != "nominatim":
+        road_data = load_road_by_ids(element_ids, road_name)
     else:
-        # Legacy direct-call flow
-        if st.session_state.stage == "start" or "appraise" in prompt.lower() or "road" in prompt.lower():
-            _handle_road_search(prompt)
-        elif st.session_state.stage == "inputs":
-            _handle_input_response(prompt)
-        else:
-            _handle_general_message(prompt)
+        # Nominatim fallback candidate — re-search by name
+        from skills.osm_lookup import search_road
+        road_data = search_road(road_name)
 
+    if not road_data.get("found"):
+        return (
+            dbc.Alert([
+                html.Strong("Could not load road details. "),
+                "Try searching again.",
+            ], color="danger"),
+            None, None, no_update, no_update, no_update, no_update,
+        )
 
-# --- File Upload for Dashcam ---
-if st.session_state.stage in ["road_found", "inputs", "analysis"]:
-    st.markdown("---")
-    uploaded_file = st.file_uploader(
-        "📹 Upload dashcam video or image for condition assessment",
-        type=["mp4", "avi", "mov", "mkv", "jpg", "jpeg", "png"],
-        help="Upload a drive-through video or road photo. TARA will analyse road condition using Vision AI."
-    )
-    if uploaded_file:
-        # Determine media type
-        ext = uploaded_file.name.split(".")[-1].lower()
-        if ext in ("jpg", "jpeg", "png"):
-            media_type = "image"
-        else:
-            media_type = "video"
+    # Build bbox for facility search
+    bbox = road_data.get("bbox")
+    if not bbox:
+        lat = road_data.get("latitude") or road_data.get("center", {}).get("lat", 0.35)
+        lon = road_data.get("longitude") or road_data.get("center", {}).get("lon", 32.58)
+        pad = 0.03
+        bbox = {"south": lat - pad, "north": lat + pad, "west": lon - pad, "east": lon + pad}
+        road_data["bbox"] = bbox
 
-        # Save to temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-            tmp.write(uploaded_file.read())
-            tmp_path = tmp.name
-
-        st.info(f"📹 {media_type.title()} uploaded! Triggering condition analysis...")
-
-        if USE_AGENT:
-            # Inject a message to trigger dashcam analysis
-            dashcam_prompt = (
-                f"Please analyse this dashcam {media_type} for road condition. "
-                f"The file is saved at: {tmp_path}"
+    facilities_data = find_facilities(bbox, buffer_km=3.0)
+    for cat, items in facilities_data["facilities"].items():
+        if items and road_data.get("coordinates_all"):
+            facilities_data["facilities"][cat] = calculate_distances_to_road(
+                items, road_data["coordinates_all"]
             )
-            st.session_state.messages.append({"role": "user", "content": f"[Uploaded {media_type}: {uploaded_file.name}]"})
-            _handle_agent_message(dashcam_prompt)
+
+    if not road_data.get("center"):
+        road_data["center"] = {
+            "lat": road_data.get("latitude", bbox["south"] + (bbox["north"] - bbox["south"]) / 2),
+            "lon": road_data.get("longitude", bbox["west"] + (bbox["east"] - bbox["west"]) / 2),
+        }
+
+    map_result = create_road_map(road_data, facilities_data)
+
+    attrs = road_data.get("attributes", {})
+    info_cards = dbc.Row([
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6(f"{road_data.get('total_length_km', '?')} km",
+                     className="mb-0 text-primary"),
+            html.Small("Length", className="text-muted"),
+        ]), className="text-center"), md=3),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6(f"{road_data.get('segment_count', '?')}",
+                     className="mb-0 text-primary"),
+            html.Small("Segments", className="text-muted"),
+        ]), className="text-center"), md=3),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6(", ".join(attrs.get("surface_types", ["?"])),
+                     className="mb-0 text-primary"),
+            html.Small("Surface", className="text-muted"),
+        ]), className="text-center"), md=3),
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H6(f"{facilities_data.get('total_count', 0)}",
+                     className="mb-0 text-primary"),
+            html.Small("Facilities", className="text-muted"),
+        ]), className="text-center"), md=3),
+    ], className="mb-2")
+
+    result_ui = html.Div([
+        dbc.Alert(
+            html.Strong(f"Selected: {road_data.get('road_name', road_name)}"),
+            color="success", className="py-2",
+        ),
+        info_cards,
+    ])
+
+    return (
+        result_ui,
+        _make_serializable(road_data),
+        _make_serializable(facilities_data),
+        map_result["children"],
+        map_result["center"],
+        map_result["zoom"],
+        map_result.get("bounds"),
+    )
+
+
+# --- Step 2: Pre-fill surface from OSM ---
+
+@callback(
+    Output("surface-type-select", "value"),
+    Input("road-data-store", "data"),
+    prevent_initial_call=True,
+)
+def prefill_surface(road_data):
+    if not road_data or not road_data.get("found"):
+        return "gravel"
+    surfaces = road_data.get("attributes", {}).get("surface_types", [])
+    if surfaces:
+        s = surfaces[0].lower()
+        if s in ("asphalt", "paved", "concrete"):
+            return "asphalt"
+        elif s in ("gravel", "compacted"):
+            return "gravel"
+        elif s in ("earth", "dirt", "sand", "ground"):
+            return "earth"
+    return "gravel"
+
+
+# --- Step 2: Dashcam Upload ---
+
+@callback(
+    Output("dashcam-result", "children"),
+    Output("condition-store", "data"),
+    Input("dashcam-upload", "contents"),
+    State("dashcam-upload", "filename"),
+    State("road-data-store", "data"),
+    prevent_initial_call=True,
+)
+def handle_dashcam_upload(contents, filename, road_data):
+    if not contents:
+        return no_update, no_update
+
+    content_type, content_string = contents.split(",", 1)
+    decoded = base64.b64decode(content_string)
+
+    ext = filename.split(".")[-1].lower() if filename else "jpg"
+    media_type = "image" if ext in ("jpg", "jpeg", "png") else "video"
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+        tmp.write(decoded)
+        tmp_path = tmp.name
+
+    try:
+        from skills.dashcam import analyze_dashcam_media
+        result = analyze_dashcam_media(tmp_path, media_type=media_type, road_data=road_data)
+        if result.get("found"):
+            ui = dbc.Alert([
+                html.Strong(f"Condition Score: {result.get('overall_condition', '?')}/100"),
+                html.Br(),
+                html.Small(
+                    f"Surface: {result.get('surface_type', '?').title()} | "
+                    f"Drainage: {result.get('drainage_condition', '?').title()}"
+                ),
+            ], color="info")
+            return ui, result
+        return dbc.Alert("Could not analyze the file.", color="warning"), None
+    except Exception as e:
+        return dbc.Alert(f"Error: {str(e)}", color="danger"), None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+# --- Step 4: Cost per km ---
+
+@callback(
+    Output("cost-per-km-display", "children"),
+    Input("total-cost-input", "value"),
+    Input("road-data-store", "data"),
+)
+def update_cost_per_km(total_cost, road_data):
+    length = 10.0
+    if road_data and road_data.get("total_length_km"):
+        length = road_data["total_length_km"]
+    if total_cost and length > 0:
+        return html.Span(f"${total_cost / length:,.0f}/km", className="text-primary fw-bold")
+    return html.Span("\u2014")
+
+
+# --- Step 5: Run CBA ---
+
+@callback(
+    Output("cba-results-area", "children"),
+    Output("results-store", "data"),
+    Output("right-panel-results", "children", allow_duplicate=True),
+    Output("cba-inputs-store", "data"),
+    Output("population-store", "data"),
+    Output("equity-store", "data"),
+    Input("run-cba-btn", "n_clicks"),
+    State("road-data-store", "data"),
+    State("facilities-data-store", "data"),
+    State("total-adt-input", "value"),
+    State("growth-rate-input", "value"),
+    State("total-cost-input", "value"),
+    State("construction-years-input", "value"),
+    State("discount-rate-input", "value"),
+    State("analysis-period-input", "value"),
+    State("base-year-input", "value"),
+    prevent_initial_call=True,
+)
+def run_cba_callback(
+    n_clicks, road_data, facilities_data,
+    adt, growth_rate_pct, total_cost, construction_years,
+    discount_rate_pct, analysis_period, base_year,
+):
+    from engine.cba import run_cba
+    from engine.equity import calculate_equity_score
+    from output.charts import (
+        create_waterfall_chart, create_cashflow_chart, create_traffic_growth_chart,
+    )
+
+    if not adt or not total_cost:
+        return (
+            dbc.Alert("Please enter traffic (ADT) and construction cost.", color="warning"),
+            no_update, no_update, no_update, no_update, no_update,
+        )
+
+    road_length = 10.0
+    if road_data and road_data.get("total_length_km"):
+        road_length = road_data["total_length_km"]
+
+    growth_rate = (growth_rate_pct or 3.5) / 100.0
+    discount_rate = (discount_rate_pct or 12.0) / 100.0
+
+    cba_inputs = {
+        "base_adt": float(adt),
+        "growth_rate": growth_rate,
+        "road_length_km": road_length,
+        "construction_cost_total": float(total_cost),
+        "construction_years": int(construction_years or 3),
+        "discount_rate": discount_rate,
+        "analysis_period": int(analysis_period or 20),
+        "base_year": int(base_year or 2025),
+    }
+
+    try:
+        cba_results = run_cba(**cba_inputs)
+    except Exception as e:
+        return (
+            dbc.Alert(f"CBA Error: {str(e)}", color="danger"),
+            no_update, no_update, no_update, no_update, no_update,
+        )
+
+    # Population
+    pop_data = None
+    try:
+        from skills.worldpop import get_population
+        if road_data and road_data.get("found"):
+            pop_data = get_population(road_data)
+    except Exception:
+        pass
+
+    # Equity
+    equity_results = None
+    try:
+        equity_results = calculate_equity_score(
+            road_data or {}, facilities_data, pop_data, cba_results
+        )
+    except Exception:
+        pass
+
+    s = cba_results.get("summary", {})
+    viable = s.get("economically_viable", False)
+    verdict_color = "success" if viable else "danger"
+    verdict_text = "ECONOMICALLY VIABLE" if viable else "NOT ECONOMICALLY VIABLE"
+
+    metric_cards = dbc.Row([
+        dbc.Col(_metric_card(
+            "NPV", f"${cba_results.get('npv', 0):,.0f}",
+            "success" if cba_results.get("npv", 0) > 0 else "danger"), md=3),
+        dbc.Col(_metric_card(
+            "EIRR", f"{s.get('eirr_pct', 'N/A')}%",
+            "success" if (s.get("eirr_pct") or 0) > discount_rate * 100 else "warning"), md=3),
+        dbc.Col(_metric_card(
+            "BCR", f"{cba_results.get('bcr', 0):.2f}",
+            "success" if cba_results.get("bcr", 0) > 1 else "danger"), md=3),
+        dbc.Col(_metric_card("FYRR", f"{s.get('fyrr_pct', 'N/A')}%", "info"), md=3),
+    ], className="mb-3")
+
+    verdict_badge = dbc.Alert(verdict_text, color=verdict_color, className="text-center fw-bold")
+
+    # Charts
+    charts_ui = html.Div()
+    try:
+        waterfall = create_waterfall_chart(cba_results)
+        cashflow = create_cashflow_chart(cba_results)
+        traffic = create_traffic_growth_chart(cba_results)
+        charts_ui = html.Div([
+            dbc.Row([dbc.Col(
+                dcc.Graph(figure=waterfall, config={"displayModeBar": False}), md=12)]),
+            dbc.Row([
+                dbc.Col(dcc.Graph(figure=cashflow, config={"displayModeBar": False}), md=6),
+                dbc.Col(dcc.Graph(figure=traffic, config={"displayModeBar": False}), md=6),
+            ]),
+        ])
+    except Exception:
+        pass
+
+    # Equity card
+    equity_ui = html.Div()
+    if equity_results:
+        equity_ui = dbc.Card(dbc.CardBody([
+            html.H6("Equity Assessment"),
+            dbc.Progress(
+                value=equity_results.get("overall_score", 0),
+                label=f"{equity_results.get('overall_score', 0)}/100",
+                color="success" if equity_results.get("overall_score", 0) >= 60 else "warning",
+                className="mb-2", style={"height": "24px"},
+            ),
+            html.Small(equity_results.get("classification", ""), className="text-muted"),
+        ]), className="mb-3")
+
+    left_result = html.Div([verdict_badge, metric_cards])
+    right_panel = html.Div([metric_cards, verdict_badge, equity_ui, charts_ui])
+
+    return (
+        left_result,
+        _make_serializable(cba_results),
+        right_panel,
+        cba_inputs,
+        _make_serializable(pop_data) if pop_data else None,
+        _make_serializable(equity_results) if equity_results else None,
+    )
+
+
+# --- Step 6: Sensitivity Controls ---
+
+@callback(
+    Output("sensitivity-controls", "children"),
+    Input("current-step-store", "data"),
+    State("results-store", "data"),
+)
+def build_sensitivity_controls(current_step, results):
+    if current_step != 6:
+        return no_update
+    if not results:
+        return dbc.Alert("Run the appraisal in Step 5 first.", color="warning")
+
+    return html.Div([
+        dbc.Label("Construction Cost Change (%)"),
+        dcc.Slider(id="sens-cost-slider", min=-30, max=50, step=5, value=0,
+                   marks={i: f"{i:+d}%" for i in range(-30, 51, 10)},
+                   tooltip={"placement": "bottom"}),
+        dbc.Label("Traffic Volume Change (%)", className="mt-3"),
+        dcc.Slider(id="sens-traffic-slider", min=-40, max=30, step=5, value=0,
+                   marks={i: f"{i:+d}%" for i in range(-40, 31, 10)},
+                   tooltip={"placement": "bottom"}),
+        dbc.Label("Growth Rate Change (pp)", className="mt-3"),
+        dcc.Slider(id="sens-growth-slider", min=-2, max=2, step=0.5, value=0,
+                   marks={i: f"{i:+.0f}pp" for i in range(-2, 3)},
+                   tooltip={"placement": "bottom"}),
+        dbc.Button("Run Full Sensitivity Analysis", id="run-sensitivity-btn",
+                   color="primary", outline=True, className="mt-3"),
+    ])
+
+
+# --- Step 6: Sensitivity Live + Full ---
+
+@callback(
+    Output("sensitivity-results-area", "children"),
+    Output("sensitivity-store", "data"),
+    Input("sens-cost-slider", "value"),
+    Input("sens-traffic-slider", "value"),
+    Input("sens-growth-slider", "value"),
+    Input("run-sensitivity-btn", "n_clicks"),
+    State("cba-inputs-store", "data"),
+    State("results-store", "data"),
+    prevent_initial_call=True,
+)
+def update_sensitivity(cost_chg, traffic_chg, growth_chg,
+                       full_clicks, cba_inputs, base_results):
+    if not cba_inputs or not base_results:
+        return dbc.Alert("Run the appraisal in Step 5 first.", color="warning"), no_update
+
+    trigger = ctx.triggered_id
+
+    # Full sensitivity
+    if trigger == "run-sensitivity-btn":
+        from engine.sensitivity import run_sensitivity_analysis
+        from output.charts import create_tornado_chart, create_scenario_chart
+
+        try:
+            sens = run_sensitivity_analysis(cba_inputs)
+        except Exception as e:
+            return dbc.Alert(f"Sensitivity error: {str(e)}", color="danger"), no_update
+
+        charts = html.Div()
+        try:
+            tornado = create_tornado_chart(sens)
+            scenario = create_scenario_chart(sens)
+            charts = dbc.Row([
+                dbc.Col(dcc.Graph(figure=tornado, config={"displayModeBar": False}), md=6),
+                dbc.Col(dcc.Graph(figure=scenario, config={"displayModeBar": False}), md=6),
+            ])
+        except Exception:
+            pass
+
+        sv = sens.get("switching_values", {})
+        sv_rows = []
+        for var, val in sv.items():
+            fmt = f"{val:+.1%} absolute" if var == "traffic_growth" else f"{val:+.0%}"
+            sv_rows.append(html.Tr([
+                html.Td(var.replace("_", " ").title()), html.Td(fmt),
+            ]))
+
+        sv_table = html.Div()
+        if sv_rows:
+            sv_table = dbc.Table([
+                html.Thead(html.Tr([html.Th("Variable"), html.Th("Switching Value")])),
+                html.Tbody(sv_rows),
+            ], bordered=True, size="sm", className="mt-2")
+
+        summary = sens.get("summary", {})
+        risk = dbc.Alert(summary.get("risk_assessment", ""), color="info", className="mt-2")
+
+        return html.Div([charts, sv_table, risk]), _make_serializable(sens)
+
+    # Live slider
+    from engine.cba import run_cba as _run_cba
+
+    modified = copy.deepcopy(cba_inputs)
+    if cost_chg:
+        modified["construction_cost_total"] *= (1 + cost_chg / 100.0)
+    if traffic_chg:
+        modified["base_adt"] *= (1 + traffic_chg / 100.0)
+    if growth_chg:
+        modified["growth_rate"] = modified.get("growth_rate", 0.035) + growth_chg / 100.0
+
+    try:
+        new = _run_cba(**modified)
+    except Exception as e:
+        return dbc.Alert(f"Error: {str(e)}", color="danger"), no_update
+
+    base_npv = base_results.get("npv", 0)
+    new_npv = new.get("npv", 0)
+    delta = new_npv - base_npv
+    dc = "success" if delta >= 0 else "danger"
+    ns = new.get("summary", {})
+
+    comparison = dbc.Row([
+        dbc.Col(_metric_card("Adjusted NPV", f"${new_npv:,.0f}", dc), md=3),
+        dbc.Col(_metric_card("NPV Change", f"${delta:+,.0f}", dc), md=3),
+        dbc.Col(_metric_card("Adjusted BCR", f"{new.get('bcr', 0):.2f}",
+                             "success" if new.get("bcr", 0) > 1 else "danger"), md=3),
+        dbc.Col(_metric_card("Adjusted EIRR", f"{ns.get('eirr_pct', 'N/A')}%", "info"), md=3),
+    ])
+    return comparison, no_update
+
+
+# --- Step 6: AI Interpretation ---
+
+@callback(
+    Output("ai-narrative", "children"),
+    Input("ai-interpret-btn", "n_clicks"),
+    State("results-store", "data"),
+    State("sensitivity-store", "data"),
+    State("road-data-store", "data"),
+    prevent_initial_call=True,
+)
+def ai_interpretation(n_clicks, cba_results, sensitivity_results, road_data):
+    if not cba_results:
+        return dbc.Alert("Run the appraisal first.", color="warning")
+
+    try:
+        from agent.orchestrator import create_agent, process_message_sync
+
+        road_name = road_data.get("name", "the road") if road_data else "the road"
+        s = cba_results.get("summary", {})
+        prompt = (
+            f"Provide a 3-4 paragraph expert interpretation of the CBA results for {road_name}. "
+            f"Key results: NPV ${cba_results.get('npv', 0):,.0f}, "
+            f"EIRR {s.get('eirr_pct', 'N/A')}%, BCR {cba_results.get('bcr', 0):.2f}. "
+        )
+        if sensitivity_results:
+            sm = sensitivity_results.get("summary", {})
+            prompt += (
+                f"Sensitivity: most sensitive to {sm.get('most_sensitive_variable', 'unknown')}. "
+                f"Risk: {sm.get('risk_assessment', 'unknown')}. "
+            )
+        prompt += "Be specific and actionable. Write for a decision-maker."
+
+        agent = create_agent()
+        text, _, _ = process_message_sync(agent, prompt)
+
+        return dbc.Card(dbc.CardBody([
+            html.H6("AI Interpretation", className="text-info"),
+            dcc.Markdown(text),
+        ]), className="mt-2 border-info")
+    except Exception as e:
+        return dbc.Alert(f"AI interpretation unavailable: {str(e)}", color="warning")
+
+
+# --- Step 7: PDF ---
+
+@callback(
+    Output("download-pdf", "data"),
+    Output("report-result-area", "children"),
+    Input("gen-pdf-btn", "n_clicks"),
+    State("road-data-store", "data"),
+    State("facilities-data-store", "data"),
+    State("population-store", "data"),
+    State("results-store", "data"),
+    State("sensitivity-store", "data"),
+    State("equity-store", "data"),
+    State("condition-store", "data"),
+    prevent_initial_call=True,
+)
+def generate_pdf_report(n_clicks, road_data, facilities_data, pop_data,
+                        cba_results, sensitivity_results, equity_results, condition_data):
+    from output.report import generate_report_pdf, get_report_summary
+
+    try:
+        pdf_bytes = generate_report_pdf(
+            road_data=road_data,
+            facilities_data=facilities_data,
+            population_data=pop_data,
+            cba_results=cba_results,
+            sensitivity_results=sensitivity_results,
+            equity_results=equity_results,
+            condition_data=condition_data,
+        )
+        road_name = "Road"
+        if road_data and road_data.get("name"):
+            road_name = road_data["name"].replace(" ", "_")
+        date_str = datetime.now().strftime("%Y%m%d")
+        filename = f"TARA_Report_{road_name}_{date_str}.pdf"
+
+        summary = get_report_summary(cba_results, sensitivity_results, equity_results)
+        return (
+            dcc.send_bytes(pdf_bytes, filename),
+            dbc.Alert([html.Strong("Report generated! "), html.Span(summary)], color="success"),
+        )
+    except Exception as e:
+        return no_update, dbc.Alert(f"Error generating report: {str(e)}", color="danger")
+
+
+# --- Step 7: CSV ---
+
+@callback(
+    Output("download-csv", "data"),
+    Input("gen-csv-btn", "n_clicks"),
+    State("results-store", "data"),
+    State("road-data-store", "data"),
+    prevent_initial_call=True,
+)
+def export_csv(n_clicks, cba_results, road_data):
+    if not cba_results or "yearly_cashflows" not in cba_results:
+        return no_update
+
+    import pandas as pd
+
+    rows = []
+    for cf in cba_results["yearly_cashflows"]:
+        rows.append({
+            "Year": cf["calendar_year"],
+            "Construction_Cost": cf["costs"]["construction"],
+            "Net_Maintenance": cf["costs"]["net_maintenance"],
+            "VOC_Savings": cf["benefits"]["voc_savings"],
+            "Time_Savings": cf["benefits"]["vot_savings"],
+            "Accident_Savings": cf["benefits"]["accident_savings"],
+            "Generated_Traffic": cf["benefits"]["generated_traffic"],
+            "Residual_Value": cf["benefits"]["residual_value"],
+            "Net_Benefit": cf["net_benefit"],
+        })
+
+    df = pd.DataFrame(rows)
+    road_name = "Road"
+    if road_data and road_data.get("name"):
+        road_name = road_data["name"].replace(" ", "_")
+    date_str = datetime.now().strftime("%Y%m%d")
+    return dcc.send_data_frame(df.to_csv, f"TARA_Cashflows_{road_name}_{date_str}.csv", index=False)
+
+
+# --- Step 7: Report Preview ---
+
+@callback(
+    Output("report-summary", "children"),
+    Input("results-store", "data"),
+    Input("current-step-store", "data"),
+)
+def show_report_summary(cba_results, current_step):
+    if current_step != 7 or not cba_results:
+        return html.Div()
+
+    from output.report import generate_report_markdown
+    try:
+        md = generate_report_markdown(cba_results=cba_results)
+        preview = md[:2000]
+        if len(md) > 2000:
+            preview += "\n\n*... (truncated \u2014 download PDF for full report)*"
+        return dbc.Card(dbc.CardBody([
+            html.H6("Report Preview"),
+            dcc.Markdown(preview, style={"fontSize": "0.8rem", "maxHeight": "400px",
+                                         "overflowY": "auto"}),
+        ]), className="mt-3")
+    except Exception:
+        return html.Div()
+
+
+# ============================================================
+# Entry Point
+# ============================================================
+
+if __name__ == "__main__":
+    app.run(debug=True, port=8050)

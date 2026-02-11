@@ -1,5 +1,5 @@
 # TARA — Day 1 Task List (Tuesday Feb 10)
-## Goal: Project scaffolding + OSM data skill + basic Streamlit app
+## Goal: Project scaffolding + OSM data skill + Dash wizard app
 
 ---
 
@@ -8,7 +8,7 @@
 - [ ] Set up project structure:
 ```
 tara/
-├── app.py                  # Streamlit main app
+├── app.py                  # Dash main app (7-step wizard + map)
 ├── requirements.txt        # Dependencies
 ├── README.md              # Project description
 ├── LICENSE                # MIT
@@ -37,12 +37,12 @@ tara/
 │   ├── __init__.py
 │   ├── report.py          # PDF/DOCX generation
 │   ├── charts.py          # Plotly/Matplotlib charts
-│   └── maps.py            # Folium map generation
+│   └── maps.py            # dash-leaflet map generation
 └── data/
     └── uganda_defaults.json  # Default parameters from UNRA calibration
 ```
 - [ ] Install core dependencies
-- [ ] Test that Streamlit runs
+- [ ] Test that Dash app runs
 
 ## TASK 2: OSM Road Lookup Skill (1.5 hrs)
 - [ ] Build `skills/osm_lookup.py`:
@@ -62,25 +62,25 @@ tara/
 
 ## TASK 4: Map Display (45 min)
 - [ ] Build `output/maps.py`:
-  - Folium map showing: road alignment, facilities as markers, corridor buffer zone
+  - dash-leaflet map showing: road alignment, facilities as markers, corridor buffer zone
   - Color-coded by facility type
   - Popup info for each feature
-- [ ] Integrate with Streamlit (`st_folium`)
+- [ ] Integrate with Dash layout (persistent map panel)
 
-## TASK 5: Streamlit Chat Interface (1 hr)
+## TASK 5: Dash Wizard Interface (1 hr)
 - [ ] Build basic `app.py`:
-  - Chat interface using `st.chat_message`
-  - User types road name → triggers OSM lookup
-  - Display: map with road + facilities, summary of what TARA found
-  - Sidebar: project parameters (can be edited)
-- [ ] Connect to OSM skills
+  - 7-step wizard: Select Road → Condition → Traffic → Costs → Results → Sensitivity → Report
+  - Step 1: Search bar with multi-result road selection (user picks from candidates)
+  - Persistent map panel (dash-leaflet) beside wizard
+  - Each step collects inputs via forms, stored in dcc.Store
+- [ ] Connect to OSM skills (search_roads_multi + load_road_by_ids)
 
 ## TASK 6: Agent Orchestrator Skeleton (1 hr)
 - [ ] Build `agent/orchestrator.py`:
   - Claude Opus 4.6 API call with tool use
   - Define tools: `search_road`, `find_facilities`, `run_cba` (stub), `analyse_video` (stub)
   - Agent decides which tools to call based on user message
-  - Return structured response to Streamlit
+  - Return structured response to Dash callbacks
 - [ ] Build `agent/tools.py` — tool definitions in Anthropic API format
 - [ ] Build `agent/prompts.py` — TARA system prompt
 

@@ -327,6 +327,146 @@ def _empty_result(road_name: str) -> dict:
     }
 
 
+def search_roads_multi(road_name: str, country: str = "Uganda", timeout: int = 30) -> list[dict]:
+    """
+    Search for roads matching a name and return multiple candidates grouped by road name.
+
+    Args:
+        road_name: Name of the road (e.g., "Kasangati-Matugga road")
+        country: Country to search in (default: Uganda)
+        timeout: API timeout in seconds
+
+    Returns:
+        List of candidate dicts, each with: name, highway_types, total_length_km,
+        segment_count, center, bbox, element_ids
+    """
+    search_terms = _build_search_terms(road_name)
+    all_elements = []
+    seen_ids = set()
+
+    for query in _build_queries(search_terms, country):
+        try:
+            result = _execute_overpass_query(query, timeout)
+            if result and result.get("elements"):
+                for el in result["elements"]:
+                    if el["type"] == "way" and el["id"] not in seen_ids:
+                        seen_ids.add(el["id"])
+                        all_elements.append(el)
+        except Exception:
+            continue
+
+    if not all_elements:
+        # Try Nominatim fallback — return as a single candidate if found
+        fallback = _search_with_nominatim_fallback(road_name, country, timeout)
+        if fallback and fallback.get("found"):
+            return [{
+                "name": fallback.get("road_name", road_name),
+                "highway_types": fallback.get("attributes", {}).get("highway_types", []),
+                "total_length_km": fallback.get("total_length_km", 0),
+                "segment_count": fallback.get("segment_count", 0),
+                "center": fallback.get("center"),
+                "bbox": fallback.get("bbox"),
+                "element_ids": [s["osm_id"] for s in fallback.get("segments", [])],
+                "source": fallback.get("source", "nominatim"),
+            }]
+        return []
+
+    # Group elements by road name
+    groups: dict[str, list] = {}
+    for el in all_elements:
+        name = el.get("tags", {}).get("name", "Unnamed")
+        groups.setdefault(name, []).append(el)
+
+    # Build candidate summary for each group
+    candidates = []
+    for name, elements in groups.items():
+        coords_all = []
+        highway_types = set()
+        element_ids = []
+        total_length = 0.0
+
+        for el in elements:
+            geom = el.get("geometry", [])
+            if not geom:
+                continue
+            coords = [(p["lat"], p["lon"]) for p in geom]
+            coords_all.extend(coords)
+            highway_types.add(el.get("tags", {}).get("highway", "unknown"))
+            element_ids.append(el["id"])
+            total_length += _calculate_length(coords)
+
+        if not coords_all:
+            continue
+
+        lats = [c[0] for c in coords_all]
+        lons = [c[1] for c in coords_all]
+
+        candidates.append({
+            "name": name,
+            "highway_types": list(highway_types),
+            "total_length_km": round(total_length, 2),
+            "segment_count": len(elements),
+            "center": {"lat": sum(lats) / len(lats), "lon": sum(lons) / len(lons)},
+            "bbox": {
+                "south": min(lats), "north": max(lats),
+                "west": min(lons), "east": max(lons),
+            },
+            "element_ids": element_ids,
+            "source": "overpass",
+        })
+
+    # Sort by relevance: name similarity to query first, then by length descending
+    query_lower = road_name.lower()
+    def _sort_key(c):
+        name_lower = c["name"].lower()
+        # Exact match gets highest priority
+        if name_lower == query_lower:
+            return (0, -c["total_length_km"])
+        # Contains the full query term
+        if query_lower in name_lower or name_lower in query_lower:
+            return (1, -c["total_length_km"])
+        # Check individual keywords from the query
+        keywords = [t.strip() for t in query_lower.replace("-", " ").replace("road", "").split() if t.strip()]
+        matches = sum(1 for kw in keywords if kw in name_lower)
+        return (2 - matches, -c["total_length_km"])
+
+    candidates.sort(key=_sort_key)
+    return candidates
+
+
+def load_road_by_ids(element_ids: list[int], road_name: str, timeout: int = 30) -> dict:
+    """
+    Load full road data for specific OSM way IDs.
+
+    Args:
+        element_ids: List of OSM way IDs to load
+        road_name: Display name for the road
+        timeout: API timeout in seconds
+
+    Returns:
+        Road data dict (same format as search_road())
+    """
+    if not element_ids:
+        return _empty_result(road_name)
+
+    ids_str = ",".join(str(i) for i in element_ids)
+    query = f"""
+    [out:json][timeout:{timeout}];
+    (
+      way(id:{ids_str});
+    );
+    out body geom;
+    """
+
+    result = _execute_overpass_query(query, timeout)
+    if result and result.get("elements"):
+        road_data = _process_road_results(result["elements"], road_name)
+        if road_data and road_data.get("segments"):
+            return road_data
+
+    return _empty_result(road_name)
+
+
 def get_road_summary(road_data: dict) -> str:
     """Generate a human-readable summary of the road data."""
     if not road_data["found"]:

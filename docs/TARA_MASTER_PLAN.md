@@ -87,16 +87,16 @@
 | Tool | Purpose |
 |------|---------|
 | Python 3.11+ | Core language |
-| Streamlit | Web UI / chat interface |
+| Dash (Plotly) | Web UI / 7-step wizard |
 | Anthropic Python SDK | Claude Opus 4.6 API calls |
 | Overpass API (OSM) | Road geometry & facilities data |
 | WorldPop API/data | Population & poverty rasters |
 | World Bank Open Data API | Transport indicators & benchmarks |
-| Folium / Leaflet | Map visualisation |
+| dash-leaflet (Leaflet.js via Dash) | Map visualisation |
 | Plotly / Matplotlib | Charts |
 | NumPy / Pandas | Calculations |
 | OpenCV | Video frame extraction |
-| ReportLab or python-docx | PDF/DOCX report generation |
+| FPDF2 / python-docx | PDF/DOCX report generation |
 | Git / GitHub | Version control & submission (must be open source) |
 
 ### 3.4 Data Sources (free, accessible)
@@ -124,11 +124,12 @@
 ## 4. TECHNOLOGY STACK
 
 ```
-FRONTEND:        Streamlit (Python)
-                 - Chat interface (st.chat_message)
-                 - Map display (Folium)
+FRONTEND:        Dash (Plotly)
+                 - 7-step wizard (Select Road → Condition → Traffic → Costs → Results → Sensitivity → Report)
+                 - Map display (dash-leaflet, persistent panel)
+                 - Multi-result road search with user pick
                  - File upload (dashcam video)
-                 - Charts (Plotly)
+                 - Charts (Plotly, native in Dash)
                  - Report download
 
 AGENT CORE:      Claude Opus 4.6 (via Anthropic API)
@@ -153,9 +154,9 @@ DATA SKILLS:     Python modules (agent invokes as tools)
                  - dashcam_assess (Claude Vision)
 
 OUTPUT:          Python
-                 - PDF report generator (ReportLab or FPDF)
-                 - Chart generator (Plotly/Matplotlib)
-                 - Map generator (Folium)
+                 - PDF report generator (FPDF2)
+                 - Chart generator (Plotly)
+                 - Map generator (dash-leaflet)
 
 REPO:            GitHub (public, MIT license)
 ```
@@ -215,14 +216,14 @@ This is the critical insight. We don't build features in isolation — we build 
 ### Tier 1: MINIMUM VIABLE DEMO (Must complete by Saturday night)
 **If everything goes wrong, this is what we present.**
 
-- [ ] Streamlit app with chat interface
-- [ ] User types road name → TARA finds it on OSM → shows map with road highlighted
-- [ ] TARA displays road attributes (length, surface, width) and nearby facilities
-- [ ] User provides traffic + cost inputs via chat
-- [ ] CBA engine calculates NPV, EIRR, BCR
-- [ ] Basic sensitivity analysis (construction cost, traffic, discount rate)
-- [ ] Results displayed with charts
-- [ ] AI-generated narrative summary of findings
+- [x] Dash app with 7-step wizard interface
+- [x] User searches road name → picks from candidates → map shows road highlighted
+- [x] TARA displays road attributes (length, surface, width) and nearby facilities
+- [x] User provides traffic + cost inputs via wizard steps
+- [x] CBA engine calculates NPV, EIRR, BCR
+- [x] Basic sensitivity analysis (construction cost, traffic, discount rate)
+- [x] Results displayed with charts
+- [x] AI-generated narrative summary of findings
 
 **This alone is a working product.** It's a smart road appraisal tool that finds the road for you, validates your inputs, runs analysis, and explains the results. Not as impressive as the full loop, but submittable.
 
@@ -252,10 +253,10 @@ Everything in Tier 2, PLUS:
 ### Tuesday Feb 10 (Today) — FOUNDATION
 **Goal: Project scaffolding + OSM data skill working**
 - [ ] Set up GitHub repo (public, MIT license)
-- [ ] Streamlit app skeleton with chat interface
-- [ ] OSM road lookup skill (Overpass API) — tested on Kasangati-Matugga
-- [ ] OSM facilities skill (health, education, markets near corridor)
-- [ ] Basic map display with road + facilities
+- [x] Dash app with 7-step wizard + persistent map
+- [x] OSM road lookup skill (Overpass API, multi-result search) — tested on Kasangati-Matugga
+- [x] OSM facilities skill (health, education, markets near corridor)
+- [x] Basic map display with road + facilities (dash-leaflet)
 
 **End of day check:** Can TARA find the Kasangati-Matugga road and show it on a map? ✅ = on track
 
