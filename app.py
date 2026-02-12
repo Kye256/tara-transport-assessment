@@ -54,6 +54,7 @@ app = dash.Dash(
     title="TARA — Transport Assessment & Road Appraisal",
 )
 server = app.server
+server.config["MAX_CONTENT_LENGTH"] = 3 * 1024 * 1024 * 1024  # 3 GB
 
 STEP_LABELS = [
     "Select Road",
@@ -204,26 +205,41 @@ def build_step2():
         html.P("Or run full video + GPS analysis:", className="text-muted fw-bold"),
         dbc.Row([
             dbc.Col([
-                dcc.Upload(
-                    id="dashcam-video-upload",
-                    children=dbc.Button("Upload MP4 Video(s)", color="outline-primary", size="sm"),
-                    accept=".mp4,.MP4,.avi,.mov",
-                    multiple=True,
+                dcc.Dropdown(
+                    id="video-preset-dropdown",
+                    options=[
+                        {"label": "Kasangati loop (42 clips, compressed)", "value": "demo2"},
+                    ],
+                    placeholder="Select a preset dataset...",
+                    className="mb-2",
                 ),
-            ], md=4),
-            dbc.Col([
-                dcc.Upload(
-                    id="gpx-upload",
-                    children=dbc.Button("Upload GPX Track(s)", color="outline-primary", size="sm"),
-                    accept=".gpx",
-                    multiple=True,
-                ),
-            ], md=4),
+            ], md=8),
             dbc.Col([
                 dbc.Button("Run Video Analysis", id="run-video-btn",
                            className="tara-btn-amber", size="sm", disabled=True),
             ], md=4),
         ], className="mb-2"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Input(
+                    id="video-path-input",
+                    placeholder="Video folder or file path",
+                    size="sm",
+                    type="text",
+                ),
+            ], md=6),
+            dbc.Col([
+                dbc.Input(
+                    id="gpx-path-input",
+                    placeholder="GPX file or folder path",
+                    size="sm",
+                    type="text",
+                ),
+            ], md=6),
+        ], className="mb-2"),
+        # Hidden upload components (preserve IDs for other callbacks)
+        dcc.Upload(id="dashcam-video-upload", style={"display": "none"}),
+        dcc.Upload(id="gpx-upload", style={"display": "none"}),
         html.Div(id="video-upload-status", className="mb-2"),
         dcc.Loading(type="default", children=html.Div(id="video-pipeline-result")),
     ]), className="mb-3")
@@ -762,34 +778,60 @@ def handle_dashcam_upload(contents, filename, road_data):
             pass
 
 
+# --- Step 2: Preset dropdown → path inputs ---
+
+@callback(
+    Output("video-path-input", "value"),
+    Output("gpx-path-input", "value"),
+    Input("video-preset-dropdown", "value"),
+    prevent_initial_call=True,
+)
+def populate_preset_paths(preset):
+    """Populate path inputs from preset dataset selection."""
+    if preset == "demo2":
+        return (
+            "data/videos/demo2_kasangati_loop/clips_compressed",
+            "data/videos/12-Feb-2026-1537.gpx",
+        )
+    return "", ""
+
+
 # --- Step 2: Video Pipeline Upload Status ---
 
 @callback(
     Output("video-upload-status", "children"),
     Output("run-video-btn", "disabled"),
-    Input("dashcam-video-upload", "filename"),
-    Input("gpx-upload", "filename"),
+    Input("video-path-input", "value"),
+    Input("gpx-path-input", "value"),
     prevent_initial_call=True,
 )
-def update_video_upload_status(video_filename, gpx_filename):
-    """Show which files are uploaded and enable the run button when both present."""
+def update_video_upload_status(video_path, gpx_path):
+    """Show which paths are set and enable the run button when both present."""
     parts = []
-    if video_filename:
-        # Handle both single file (str) and multiple files (list)
-        if isinstance(video_filename, list):
-            count = len(video_filename)
-            label = f"{count} video file{'s' if count != 1 else ''}"
+    has_video = False
+    has_gpx = False
+
+    if video_path and video_path.strip():
+        vp = video_path.strip()
+        if os.path.exists(vp):
+            if os.path.isdir(vp):
+                mp4s = [f for f in os.listdir(vp) if f.lower().endswith((".mp4", ".avi", ".mov"))]
+                parts.append(html.Small(f"Video path: {len(mp4s)} clips in {os.path.basename(vp)}/", className="text-success me-3"))
+            else:
+                parts.append(html.Small(f"Video path: {os.path.basename(vp)}", className="text-success me-3"))
+            has_video = True
         else:
-            label = video_filename
-        parts.append(html.Small(f"Video: {label}", className="text-success me-3"))
-    if gpx_filename:
-        if isinstance(gpx_filename, list):
-            count = len(gpx_filename)
-            label = f"{count} GPX file{'s' if count != 1 else ''}"
+            parts.append(html.Small("Video path not found", className="text-danger me-3"))
+
+    if gpx_path and gpx_path.strip():
+        gp = gpx_path.strip()
+        if os.path.exists(gp):
+            parts.append(html.Small(f"GPX path: {os.path.basename(gp)}", className="text-success"))
+            has_gpx = True
         else:
-            label = gpx_filename
-        parts.append(html.Small(f"GPX: {label}", className="text-success"))
-    both_ready = bool(video_filename and gpx_filename)
+            parts.append(html.Small("GPX path not found", className="text-danger"))
+
+    both_ready = has_video and has_gpx
     return html.Div(parts), not both_ready
 
 
@@ -802,62 +844,46 @@ def update_video_upload_status(video_filename, gpx_filename):
     Output("main-map", "children", allow_duplicate=True),
     Output("map-bounds-store", "data", allow_duplicate=True),
     Input("run-video-btn", "n_clicks"),
-    State("dashcam-video-upload", "contents"),
-    State("dashcam-video-upload", "filename"),
-    State("gpx-upload", "contents"),
-    State("gpx-upload", "filename"),
+    State("video-path-input", "value"),
+    State("gpx-path-input", "value"),
     State("road-data-store", "data"),
     State("main-map", "children"),
     prevent_initial_call=True,
 )
-def run_video_pipeline(n_clicks, video_contents, video_filename,
-                       gpx_contents, gpx_filename, road_data, current_map_children):
-    """Run the full video + GPS analysis pipeline."""
-    if not n_clicks or not video_contents or not gpx_contents:
+def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
+                       road_data, current_map_children):
+    """Run the full video + GPS analysis pipeline using local file paths."""
+    if not n_clicks:
         return no_update, no_update, no_update, no_update, no_update
 
-    # Normalize to lists (Dash sends scalar for single file, list for multiple)
-    if not isinstance(video_contents, list):
-        video_contents = [video_contents]
-        video_filename = [video_filename]
-    if not isinstance(gpx_contents, list):
-        gpx_contents = [gpx_contents]
-        gpx_filename = [gpx_filename]
+    video_path = None
+    gpx_path = None
 
-    tmp_dir = None
+    if video_path_input and video_path_input.strip():
+        vp = video_path_input.strip()
+        if not os.path.exists(vp):
+            return (
+                dbc.Alert(f"Video path not found: {vp}", color="danger"),
+                no_update, no_update, no_update, no_update,
+            )
+        video_path = vp
+
+    if gpx_path_input and gpx_path_input.strip():
+        gp = gpx_path_input.strip()
+        if not os.path.exists(gp):
+            return (
+                dbc.Alert(f"GPX path not found: {gp}", color="danger"),
+                no_update, no_update, no_update, no_update,
+            )
+        gpx_path = gp
+
+    if not video_path or not gpx_path:
+        return (
+            dbc.Alert("Please provide both video and GPX paths.", color="warning"),
+            no_update, no_update, no_update, no_update,
+        )
+
     try:
-        tmp_dir = tempfile.mkdtemp(prefix="tara_upload_")
-        tmp_video_dir = os.path.join(tmp_dir, "videos")
-        tmp_gpx_dir = os.path.join(tmp_dir, "gpx")
-        os.makedirs(tmp_video_dir)
-        os.makedirs(tmp_gpx_dir)
-
-        # Write all video files to temp video directory
-        for contents, fname in zip(video_contents, video_filename):
-            _, b64 = contents.split(",", 1)
-            decoded = base64.b64decode(b64)
-            out_path = os.path.join(tmp_video_dir, fname)
-            with open(out_path, "wb") as f:
-                f.write(decoded)
-
-        # Write all GPX files to temp gpx directory
-        for contents, fname in zip(gpx_contents, gpx_filename):
-            _, b64 = contents.split(",", 1)
-            decoded = base64.b64decode(b64)
-            out_path = os.path.join(tmp_gpx_dir, fname)
-            with open(out_path, "wb") as f:
-                f.write(decoded)
-
-        # Use directory paths if multiple files, single file path otherwise
-        if len(video_filename) == 1:
-            video_path = os.path.join(tmp_video_dir, video_filename[0])
-        else:
-            video_path = tmp_video_dir
-
-        if len(gpx_filename) == 1:
-            gpx_path = os.path.join(tmp_gpx_dir, gpx_filename[0])
-        else:
-            gpx_path = tmp_gpx_dir
 
         from video.video_pipeline import run_pipeline
         result = run_pipeline(
@@ -867,6 +893,19 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
             max_frames=20,
             use_mock=False,
         )
+
+        # Handle pipeline error responses (size guards, memory errors, etc.)
+        if result.get("error"):
+            error_msg = result.get("message", "Unknown pipeline error")
+            warnings = result.get("warnings", [])
+            alert_children = [html.Strong("Pipeline Error: "), error_msg]
+            if warnings:
+                alert_children.append(html.Br())
+                alert_children.append(html.Small("; ".join(warnings)))
+            return (
+                dbc.Alert(alert_children, color="danger"),
+                no_update, no_update, no_update, no_update,
+            )
 
         summary = result["summary"]
         geojson = result["geojson"]
@@ -997,13 +1036,6 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
             dbc.Alert(f"Video pipeline error: {str(e)}", color="danger"),
             no_update, no_update, no_update, no_update,
         )
-    finally:
-        if tmp_dir:
-            import shutil
-            try:
-                shutil.rmtree(tmp_dir)
-            except OSError:
-                pass
 
 
 # --- Step 4: Cost per km ---
