@@ -14,6 +14,7 @@ from video.video_map import (
     generate_condition_narrative,
     generate_condition_narrative_mock,
 )
+from video.intervention import recommend_interventions_for_route
 
 
 def run_pipeline(
@@ -54,9 +55,9 @@ def run_pipeline(
     t0 = time.time()
     is_dir = os.path.isdir(video_path)
     VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov")
-    MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
-    MAX_PER_CLIP_SIZE = 100 * 1024 * 1024  # 100 MB
-    MAX_CLIP_COUNT = 60
+    MAX_TOTAL_SIZE = 500 * 1024 * 1024  # 500 MB
+    MAX_PER_CLIP_SIZE = 50 * 1024 * 1024  # 50 MB
+    MAX_CLIP_COUNT = 30
 
     # ── SIZE GUARDS ──────────────────────────────────────────────────
     warnings = []
@@ -115,9 +116,10 @@ def run_pipeline(
                 }
             if total_size > MAX_PER_CLIP_SIZE:
                 size_mb_clip = total_size / (1024 ** 2)
-                warnings.append(
-                    f"Clip '{os.path.basename(video_path)}' is {size_mb_clip:.0f}MB (>{MAX_PER_CLIP_SIZE // (1024 * 1024)}MB recommended). Consider compressing."
-                )
+                return {
+                    "error": True,
+                    "message": f"Clip '{os.path.basename(video_path)}' is {size_mb_clip:.0f}MB (>{MAX_PER_CLIP_SIZE // (1024 * 1024)}MB). Please compress first.",
+                }
 
     progress(1, f"Validating uploads... (checking {n_clips} clips, {size_mb:.0f}MB total)")
 
@@ -234,9 +236,17 @@ def run_pipeline(
         point_geojson = frames_to_geojson(assessed_frames)
         panel_data = build_condition_summary_panel(summary, total_distance_km=total_dist_km)
 
-        # --- Stage 6: Generate narrative ---
-        progress(6, "Generating assessment narrative...")
+        # --- Stage 6: Recommend interventions ---
+        progress(6, "Recommending interventions...")
 
+        section_props = [feat["properties"] for feat in geojson["features"]]
+        interventions = recommend_interventions_for_route(section_props)
+        route_summary = interventions.get("route_summary", {})
+        total_intervention_cost = route_summary.get("total_cost", 0)
+        print(f"  \u2192 {len(interventions['sections'])} sections, "
+              f"est. cost ${total_intervention_cost:,.0f}")
+
+        # Generate narrative
         if use_mock:
             narrative = generate_condition_narrative_mock(summary)
         else:
@@ -265,7 +275,7 @@ def run_pipeline(
         gpx_label = os.path.basename(gpx_path)
 
         n_sections_final = len(geojson["features"])
-        progress(7, f"Complete \u2713 \u2014 {n_sections_final} sections assessed over {total_dist_km:.1f}km")
+        progress(7, f"Complete \u2713 \u2014 {n_sections_final} sections, {total_dist_km:.1f}km, est. cost ${total_intervention_cost:,.0f}")
 
         result_dict = {
             "frames": assessed_frames,
@@ -274,6 +284,7 @@ def run_pipeline(
             "point_geojson": point_geojson,
             "narrative": narrative,
             "panel_data": panel_data,
+            "interventions": interventions,
             "metadata": {
                 "video_file": video_label,
                 "gpx_file": gpx_label,

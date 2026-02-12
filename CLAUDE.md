@@ -47,7 +47,8 @@ Kasangati-Matugga road, Wakiso District, Uganda (part of Kira-Kasangati-Matugga 
 - [x] Plotly charts (tornado, waterfall, cashflow, traffic, scenarios)
 - [x] WorldPop integration
 - [x] Input validation warnings (ADT, cost/km, discount rate, analysis period)
-- [x] Video pipeline validator: 11/11 passing (`python -m video.test_pipeline`)
+- [x] Video pipeline validator: 12/12 passing (`python -m video.test_pipeline`)
+- [x] Intervention recommendation per section (Uganda-calibrated costs)
 
 ## Video Pipeline API Changes
 - `run_pipeline()` — added `progress_callback`, `skip_size_guards`, `all_frames` pass-through
@@ -55,8 +56,10 @@ Kasangati-Matugga road, Wakiso District, Uganda (part of Kira-Kasangati-Matugga 
 - `get_trackpoints_between()` — new function in `gps_utils.py` for retrieving GPX points in a time window
 - `extract_frames()` — folder-aware (accepts directory of clips with cumulative timestamps)
 - `parse_gpx_folder()` — new function in `gps_utils.py` for multi-GPX directory support
+- `recommend_interventions_for_route()` — new function in `video/intervention.py`; returns per-section intervention recommendations with code, name, cost_per_km, design_life, reasoning
+- `frames_to_condition_geojson()` — sections now break on surface_type change (in addition to condition_class change and distance > 1km); `length_km` added to feature properties
 - Size guards: 500MB total, 50MB/clip, 30 clip max; catches MemoryError/OverflowError
-- Test: `venv/bin/python -m video.test_pipeline` (runs mock pipeline on demo data, validates 11 checks)
+- Test: `venv/bin/python -m video.test_pipeline` (runs mock pipeline on demo data, validates 12 checks)
 
 ## Conventions
 - Python 3.11+

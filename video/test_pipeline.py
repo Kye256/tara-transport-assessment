@@ -1,4 +1,4 @@
-"""Pipeline validator — 11 checks on GeoJSON output.
+"""Pipeline validator — 12 checks on GeoJSON output.
 
 Run with: python -m video.test_pipeline
 """
@@ -7,6 +7,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 import time
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,10 +39,10 @@ def linestring_length_km(coords: list[list[float]]) -> float:
 
 
 def run_checks(geojson: dict, pipeline_result: dict = None) -> int:
-    """Run 11 validation checks on GeoJSON. Returns number of passes."""
+    """Run 12 validation checks on GeoJSON. Returns number of passes."""
     features = geojson.get("features", [])
     passed = 0
-    total = 11
+    total = 12
 
     # --- Check 1: CONTINUITY ---
     if len(features) < 2:
@@ -129,7 +130,7 @@ def run_checks(geojson: dict, pipeline_result: dict = None) -> int:
               f"{straight_sections[:3]}")
 
     # --- Check 7: PROPERTIES ---
-    required_props = {"condition_class", "color", "avg_iri", "surface_type", "section_index"}
+    required_props = {"condition_class", "color", "avg_iri", "surface_type", "section_index", "length_km"}
     missing = []
     for i, feat in enumerate(features):
         props = feat.get("properties", {})
@@ -175,30 +176,67 @@ def run_checks(geojson: dict, pipeline_result: dict = None) -> int:
         print(f"[FAIL] 10. Total distance: {total_dist:.2f}km (expected {EXPECTED_DISTANCE_KM}km +/- 20%)")
 
     # --- Check 11: SIZE GUARDS ---
-    # Test that the pipeline rejects oversized inputs
-    size_ok = True
+    # Test that the pipeline returns error dicts (not crashes) for oversized inputs
+    size_pass = True
     try:
         from video.video_pipeline import run_pipeline
-        # Test with too many clips (>30) — we can check by calling with a non-existent dir
-        # For now, check that the function has the guard logic
-        import inspect
-        source = inspect.getsource(run_pipeline)
-        has_size_check = "500" in source or "size" in source.lower() or "memory" in source.lower()
-        has_clip_count_check = "30" in source or "clip" in source.lower()
-        has_error_handling = "MemoryError" in source or "OverflowError" in source
 
-        if has_size_check and has_error_handling:
-            print(f"[PASS] 11. Size guards: Pipeline has size validation and error handling")
+        # Test 1: Too many clips (>30) — create temp dir with 31 tiny files
+        tmp = tempfile.mkdtemp(prefix="tara_size_test_")
+        for i in range(31):
+            with open(os.path.join(tmp, f"clip_{i:03d}.mp4"), "wb") as f:
+                f.write(b"\x00" * 100)
+        result_count = run_pipeline(video_path=tmp, gpx_path=GPX_PATH, use_mock=True)
+        if not result_count.get("error"):
+            print(f"[FAIL] 11. Size guards: Pipeline did not reject 31 clips")
+            size_pass = False
+
+        # Test 2: Single file >50MB — create large temp file
+        big_file = os.path.join(tmp, "big.mp4")
+        with open(big_file, "wb") as f:
+            f.seek(51 * 1024 * 1024)
+            f.write(b"\x00")
+        result_big = run_pipeline(video_path=big_file, gpx_path=GPX_PATH, use_mock=True)
+        if not result_big.get("error"):
+            print(f"[FAIL] 11. Size guards: Pipeline did not reject 51MB clip")
+            size_pass = False
+
+        # Cleanup
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+        if size_pass:
+            print(f"[PASS] 11. Size guards: Pipeline rejects oversized inputs correctly")
             passed += 1
-        else:
-            missing_guards = []
-            if not has_size_check:
-                missing_guards.append("size check")
-            if not has_error_handling:
-                missing_guards.append("MemoryError/OverflowError handling")
-            print(f"[FAIL] 11. Size guards: Missing {', '.join(missing_guards)}")
     except Exception as e:
-        print(f"[FAIL] 11. Size guards: Error inspecting pipeline: {e}")
+        print(f"[FAIL] 11. Size guards: Error testing guards: {e}")
+
+    # --- Check 12: INTERVENTION ---
+    intervention_ok = True
+    required_intervention_keys = {"code", "name", "cost_per_km", "design_life", "reasoning"}
+
+    if pipeline_result is None:
+        print(f"[FAIL] 12. Intervention: No pipeline result to check")
+    else:
+        interventions = pipeline_result.get("interventions", {})
+        sections = interventions.get("sections", [])
+        if not sections:
+            print(f"[FAIL] 12. Intervention: No intervention sections found in pipeline output")
+            intervention_ok = False
+        else:
+            for sec in sections:
+                iv = sec.get("intervention", {})
+                absent = required_intervention_keys - set(iv.keys())
+                if absent:
+                    print(f"[FAIL] 12. Intervention: Section {sec.get('section_index', '?')} "
+                          f"missing intervention keys: {absent}")
+                    intervention_ok = False
+                    break
+        if intervention_ok and sections:
+            route = interventions.get("route_summary", {})
+            print(f"[PASS] 12. Intervention: {len(sections)} sections with recommendations, "
+                  f"total est. ${route.get('total_cost', 0):,.0f}")
+            passed += 1
 
     print(f"\n{'=' * 40}")
     if passed == total:
@@ -211,7 +249,7 @@ def run_checks(geojson: dict, pipeline_result: dict = None) -> int:
 def main():
     """Run the pipeline and validate output."""
     print("=" * 50)
-    print("TARA Video Pipeline Validator")
+    print("TARA Video Pipeline Validator (12 checks)")
     print("=" * 50)
 
     # Check test data exists
@@ -239,9 +277,14 @@ def main():
         frame_interval=30,
         max_frames=40,
         use_mock=True,
+        skip_size_guards=True,
     )
     elapsed = time.time() - t0
     print(f"\nPipeline ran in {elapsed:.1f}s")
+
+    if result.get("error"):
+        print(f"\nERROR: Pipeline returned error: {result.get('message')}")
+        sys.exit(1)
 
     geojson = result["geojson"]
     print(f"GeoJSON: {len(geojson['features'])} features")
@@ -265,4 +308,4 @@ def main():
 
 if __name__ == "__main__":
     passed = main()
-    sys.exit(0 if passed == 11 else 1)
+    sys.exit(0 if passed == 12 else 1)

@@ -146,22 +146,26 @@ def frames_to_condition_geojson(
     sections: list[list[dict]] = []
     current_section = [geo_frames[0]]
     current_condition = geo_frames[0]["assessment"]["condition_class"]
+    current_surface = geo_frames[0]["assessment"]["surface_type"]
     section_distance_m = 0.0  # running distance in metres
 
     for frame in geo_frames[1:]:
         condition = frame["assessment"]["condition_class"]
+        surface = frame["assessment"]["surface_type"]
 
         # Distance from previous frame to this frame
         prev = current_section[-1]
         dist_m = haversine(prev["lat"], prev["lon"], frame["lat"], frame["lon"])
 
         condition_changed = (condition != current_condition)
+        surface_changed = (surface != current_surface)
         distance_exceeded = ((section_distance_m + dist_m) > MAX_SECTION_KM * 1000)
 
-        if condition_changed or distance_exceeded:
+        if condition_changed or surface_changed or distance_exceeded:
             sections.append(current_section)
             current_section = [frame]
             current_condition = condition
+            current_surface = surface
             section_distance_m = 0.0
         else:
             current_section.append(frame)
@@ -258,6 +262,11 @@ def frames_to_condition_geojson(
         # Store representative image for Dash component popups
         rep_image = rep_frame.get("image_base64", "")
 
+        linestring_length_km_val = sum(
+            haversine(coords[i-1][1], coords[i-1][0], coords[i][1], coords[i][0])
+            for i in range(1, len(coords))
+        ) / 1000
+
         feature = {
             "type": "Feature",
             "geometry": {
@@ -272,6 +281,7 @@ def frames_to_condition_geojson(
                 "surface_type": surface_type,
                 "distress_types": ", ".join(sorted(all_distress)) if all_distress else "none",
                 "notes": notes,
+                "length_km": round(linestring_length_km_val, 2),
                 "section_index": idx,
                 "frame_indices": frame_indices,
                 "representative_frame_index": rep_frame["frame_index"],
@@ -325,10 +335,15 @@ def frames_to_condition_geojson(
                 seg_km = haversine(coords[i - 1][1], coords[i - 1][0],
                                    coords[i][1], coords[i][0]) / 1000
                 if sub_dist + seg_km > MAX_SECTION_KM and len(sub_coords) >= 2:
+                    sub_length_km = sum(
+                        haversine(sub_coords[j-1][1], sub_coords[j-1][0],
+                                  sub_coords[j][1], sub_coords[j][0])
+                        for j in range(1, len(sub_coords))
+                    ) / 1000
                     new_feat = {
                         "type": "Feature",
                         "geometry": {"type": "LineString", "coordinates": list(sub_coords)},
-                        "properties": dict(feat["properties"]),
+                        "properties": {**dict(feat["properties"]), "length_km": round(sub_length_km, 2)},
                     }
                     final_features.append(new_feat)
                     sub_coords = [coords[i - 1]]  # overlap at boundary
@@ -336,10 +351,15 @@ def frames_to_condition_geojson(
                 sub_coords.append(coords[i])
                 sub_dist += seg_km
             if len(sub_coords) >= 2:
+                sub_length_km = sum(
+                    haversine(sub_coords[j-1][1], sub_coords[j-1][0],
+                              sub_coords[j][1], sub_coords[j][0])
+                    for j in range(1, len(sub_coords))
+                ) / 1000
                 new_feat = {
                     "type": "Feature",
                     "geometry": {"type": "LineString", "coordinates": list(sub_coords)},
-                    "properties": dict(feat["properties"]),
+                    "properties": {**dict(feat["properties"]), "length_km": round(sub_length_km, 2)},
                 }
                 final_features.append(new_feat)
 
