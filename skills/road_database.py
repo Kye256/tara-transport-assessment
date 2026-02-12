@@ -68,6 +68,7 @@ def load_road_network() -> dict:
             "surface_predicted": props.get("surface_predicted"),
             "pct_paved": props.get("pct_paved"),
             "urban_pct": props.get("urban_pct"),
+            "feeder_road_km": props.get("feeder_road_km"),
         })
 
     # Merge each group into a single logical road
@@ -92,6 +93,8 @@ def load_road_network() -> dict:
         surface_preds = set()
         pct_paved_vals = []
         urban_pct_vals = []
+        feeder_km_total = 0.0
+        feeder_km_any = False
 
         for seg in segments:
             all_coords.extend(seg["coords"])
@@ -114,6 +117,9 @@ def load_road_network() -> dict:
                 pct_paved_vals.append(seg["pct_paved"])
             if seg.get("urban_pct") is not None:
                 urban_pct_vals.append(seg["urban_pct"])
+            if seg.get("feeder_road_km") is not None:
+                feeder_km_total += seg["feeder_road_km"]
+                feeder_km_any = True
 
         lats = [c[0] for c in all_coords]
         lons = [c[1] for c in all_coords]
@@ -143,6 +149,7 @@ def load_road_network() -> dict:
             "surface_predicted": ", ".join(sorted(surface_preds)) if surface_preds else None,
             "pct_paved": round(sum(pct_paved_vals) / len(pct_paved_vals), 1) if pct_paved_vals else None,
             "urban_pct": round(sum(urban_pct_vals) / len(urban_pct_vals), 1) if urban_pct_vals else None,
+            "feeder_road_km": round(feeder_km_total, 1) if feeder_km_any else None,
         }
 
         roads.append(road)
@@ -256,6 +263,8 @@ def _lightweight(road: dict) -> dict:
         result["pct_paved"] = road["pct_paved"]
     if road.get("urban_pct") is not None:
         result["urban_pct"] = road["urban_pct"]
+    if road.get("feeder_road_km") is not None:
+        result["feeder_road_km"] = road["feeder_road_km"]
     return result
 
 

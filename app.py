@@ -558,6 +558,8 @@ def select_road(road_id):
     if road_record.get("urban_pct") is not None:
         label = "Urban" if road_record["urban_pct"] > 50 else "Rural"
         info_rows.append(html.Tr([html.Td("Urban/Rural"), html.Td(f"{label} ({road_record['urban_pct']:.0f}% urban)")]))
+    if road_record.get("feeder_road_km") is not None:
+        info_rows.append(html.Tr([html.Td("Feeder Roads (5km)"), html.Td(f"{road_record['feeder_road_km']:,.0f} km")]))
     info_table = html.Table([html.Tbody(info_rows)], className="tara-road-info")
 
     result_ui = html.Div([

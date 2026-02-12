@@ -19,6 +19,11 @@ data/*.dbf
 data/*.prj
 data/*.cpg
 data/*.gpkg
+data/*.gpkg.gz
+data/*.zip
+data/*.sbn
+data/*.sbx
+data/travel_times/
 
 # IDE
 .vscode/
