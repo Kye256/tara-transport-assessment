@@ -218,6 +218,69 @@ def _build_endpoint_markers(road_data: dict) -> list:
     ]
 
 
+def build_condition_layer(geojson: dict) -> list:
+    """Build dash-leaflet CircleMarker components from video pipeline GeoJSON.
+
+    Args:
+        geojson: GeoJSON FeatureCollection from video pipeline (frames_to_geojson).
+
+    Returns:
+        List of dl.CircleMarker components, color-coded by condition class.
+    """
+    condition_colors = {
+        "good": "#2d5f4a",
+        "fair": "#9a6b2f",
+        "poor": "#c4652a",
+        "bad": "#a83a2f",
+    }
+
+    markers = []
+    for feature in geojson.get("features", []):
+        props = feature.get("properties", {})
+        geom = feature.get("geometry", {})
+        coords = geom.get("coordinates", [])
+        if len(coords) < 2:
+            continue
+
+        lon, lat = coords[0], coords[1]
+        condition = props.get("condition_class", "fair")
+        color = condition_colors.get(condition, "#9a6b2f")
+        iri = props.get("iri_estimate", "?")
+        surface = props.get("surface_type", "?")
+        notes = props.get("notes", "")
+        distress = props.get("distress_types", [])
+        severity = props.get("distress_severity", "?")
+
+        tooltip_text = f"{condition.title()} | IRI ~{iri} | {surface}"
+
+        distress_str = ", ".join(distress) if distress else "none"
+        popup_html = (
+            f"<b>Condition: {condition.title()}</b><br>"
+            f"IRI: {iri} m/km<br>"
+            f"Surface: {surface}<br>"
+            f"Distress: {distress_str}<br>"
+            f"Severity: {severity}<br>"
+            f"<i>{notes}</i>"
+        )
+
+        markers.append(
+            dl.CircleMarker(
+                center=[lat, lon],
+                radius=8,
+                color="white",
+                weight=2,
+                fillColor=color,
+                fillOpacity=0.9,
+                children=[
+                    dl.Tooltip(tooltip_text),
+                    dl.Popup(popup_html),
+                ],
+            )
+        )
+
+    return markers
+
+
 def _surface_color(surface: str) -> str:
     """Color-code road segments by surface type."""
     surface_colors = {

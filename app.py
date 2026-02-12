@@ -200,6 +200,30 @@ def build_step2():
             className="mb-2",
         ),
         html.Div(id="dashcam-result"),
+        html.Hr(),
+        html.P("Or run full video + GPS analysis:", className="text-muted fw-bold"),
+        dbc.Row([
+            dbc.Col([
+                dcc.Upload(
+                    id="dashcam-video-upload",
+                    children=dbc.Button("Upload MP4 Video", color="outline-primary", size="sm"),
+                    accept=".mp4,.MP4,.avi,.mov",
+                ),
+            ], md=4),
+            dbc.Col([
+                dcc.Upload(
+                    id="gpx-upload",
+                    children=dbc.Button("Upload GPX Track", color="outline-primary", size="sm"),
+                    accept=".gpx",
+                ),
+            ], md=4),
+            dbc.Col([
+                dbc.Button("Run Video Analysis", id="run-video-btn",
+                           className="tara-btn-amber", size="sm", disabled=True),
+            ], md=4),
+        ], className="mb-2"),
+        html.Div(id="video-upload-status", className="mb-2"),
+        dcc.Loading(type="default", children=html.Div(id="video-pipeline-result")),
     ]), className="mb-3")
 
 
@@ -363,6 +387,7 @@ app.layout = html.Div([
     dcc.Store(id="cba-inputs-store", data=None),
     dcc.Store(id="ai-narrative-store", data=None),
     dcc.Store(id="map-bounds-store", data=None),
+    dcc.Store(id="video-condition-store", data=None),
 
     # Header
     html.Div([
@@ -733,6 +758,202 @@ def handle_dashcam_upload(contents, filename, road_data):
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+# --- Step 2: Video Pipeline Upload Status ---
+
+@callback(
+    Output("video-upload-status", "children"),
+    Output("run-video-btn", "disabled"),
+    Input("dashcam-video-upload", "filename"),
+    Input("gpx-upload", "filename"),
+    prevent_initial_call=True,
+)
+def update_video_upload_status(video_filename, gpx_filename):
+    """Show which files are uploaded and enable the run button when both present."""
+    parts = []
+    if video_filename:
+        parts.append(html.Small(f"Video: {video_filename}", className="text-success me-3"))
+    if gpx_filename:
+        parts.append(html.Small(f"GPX: {gpx_filename}", className="text-success"))
+    both_ready = bool(video_filename and gpx_filename)
+    return html.Div(parts), not both_ready
+
+
+# --- Step 2: Video Pipeline ---
+
+@callback(
+    Output("video-pipeline-result", "children"),
+    Output("condition-store", "data", allow_duplicate=True),
+    Output("video-condition-store", "data"),
+    Output("main-map", "children", allow_duplicate=True),
+    Output("map-bounds-store", "data", allow_duplicate=True),
+    Input("run-video-btn", "n_clicks"),
+    State("dashcam-video-upload", "contents"),
+    State("dashcam-video-upload", "filename"),
+    State("gpx-upload", "contents"),
+    State("gpx-upload", "filename"),
+    State("road-data-store", "data"),
+    State("main-map", "children"),
+    prevent_initial_call=True,
+)
+def run_video_pipeline(n_clicks, video_contents, video_filename,
+                       gpx_contents, gpx_filename, road_data, current_map_children):
+    """Run the full video + GPS analysis pipeline."""
+    if not n_clicks or not video_contents or not gpx_contents:
+        return no_update, no_update, no_update, no_update, no_update
+
+    # Decode and save video to temp file
+    _, video_b64 = video_contents.split(",", 1)
+    video_ext = video_filename.split(".")[-1].lower() if video_filename else "mp4"
+    video_decoded = base64.b64decode(video_b64)
+
+    # Decode and save GPX to temp file
+    _, gpx_b64 = gpx_contents.split(",", 1)
+    gpx_decoded = base64.b64decode(gpx_b64)
+
+    video_tmp = None
+    gpx_tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{video_ext}") as f:
+            f.write(video_decoded)
+            video_tmp = f.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".gpx") as f:
+            f.write(gpx_decoded)
+            gpx_tmp = f.name
+
+        # Extract video start time from filename (e.g. 2026_02_12_144138_00.MP4)
+        video_start_time = None
+        if video_filename:
+            try:
+                from video.run_all import extract_start_time
+                video_start_time = extract_start_time(video_filename)
+            except Exception:
+                pass
+
+        from video.video_pipeline import run_pipeline
+        result = run_pipeline(
+            video_path=video_tmp,
+            gpx_path=gpx_tmp,
+            video_start_time=video_start_time,
+            frame_interval=5,
+            max_frames=20,
+            use_mock=False,
+        )
+
+        summary = result["summary"]
+        geojson = result["geojson"]
+        narrative = result.get("narrative", "")
+        metadata = result.get("metadata", {})
+
+        # --- Build result UI ---
+        condition_dist = summary.get("condition_distribution", {})
+        dist_badges = []
+        badge_colors = {"good": "success", "fair": "warning", "poor": "danger", "bad": "danger"}
+        for cond, count in condition_dist.items():
+            dist_badges.append(
+                dbc.Badge(f"{cond}: {count}", color=badge_colors.get(cond, "secondary"),
+                          className="me-1")
+            )
+
+        distress_list = summary.get("distress_types_found", [])
+        distress_str = ", ".join(d.replace("_", " ").title() for d in distress_list) if distress_list else "None"
+
+        result_ui = html.Div([
+            dbc.Alert([
+                html.Strong("Video Analysis Complete"),
+                html.Br(),
+                html.Small(
+                    f"{metadata.get('total_distance_km', '?')} km analysed in "
+                    f"{metadata.get('processing_time_sec', '?')}s"
+                ),
+            ], color="success", className="py-2"),
+            html.Div([
+                _metric_card("Avg IRI", f"{summary.get('average_iri', '?')} m/km", "info"),
+                _metric_card("Surface", summary.get("dominant_surface", "?").title(), "primary"),
+                _metric_card("Condition", summary.get("dominant_condition", "?").title(),
+                             "success" if summary.get("dominant_condition") == "good" else "warning"),
+                _metric_card("Frames", str(summary.get("total_frames_assessed", 0)), "primary"),
+            ], className="tara-metric-row"),
+            html.Div(dist_badges, className="mb-2"),
+            html.Small(f"Distress: {distress_str}", className="text-muted d-block mb-2"),
+            dbc.Card(dbc.CardBody([
+                html.H6("Condition Narrative"),
+                html.P(narrative, style={"fontSize": "0.85rem", "whiteSpace": "pre-line"}),
+            ]), className="mb-2") if narrative else html.Div(),
+        ])
+
+        # --- Bridge to condition-store format ---
+        avg_iri = summary.get("average_iri", 11.0)
+        condition_data = {
+            "source": "video_pipeline",
+            "surface_type": summary.get("dominant_surface", "gravel"),
+            "condition_rating": summary.get("dominant_condition", "poor"),
+            "iri": avg_iri,
+            "overall_condition": _iri_to_score(avg_iri),
+            "defects": distress_list,
+            "drainage_condition": "unknown",
+        }
+
+        # --- Build map layer ---
+        from output.maps import build_condition_layer
+        condition_markers = build_condition_layer(geojson)
+
+        # Preserve existing map children and append condition markers
+        map_children = list(current_map_children) if current_map_children else [
+            dl.TileLayer(url=TILE_URL, attribution=TILE_ATTR)
+        ]
+        map_children.extend(condition_markers)
+
+        # Add a simple legend
+        legend_html = html.Div([
+            html.Div("Condition:", style={"fontWeight": "bold", "fontSize": "0.75rem"}),
+            html.Div([
+                html.Span("\u25cf", style={"color": "#2d5f4a"}), " Good ",
+                html.Span("\u25cf", style={"color": "#9a6b2f"}), " Fair ",
+                html.Span("\u25cf", style={"color": "#c4652a"}), " Poor ",
+                html.Span("\u25cf", style={"color": "#a83a2f"}), " Bad",
+            ], style={"fontSize": "0.7rem"}),
+        ], style={
+            "position": "absolute", "bottom": "10px", "right": "10px",
+            "background": "rgba(255,255,255,0.9)", "padding": "6px 10px",
+            "borderRadius": "4px", "zIndex": "1000", "border": "1px solid #ccc",
+        })
+        map_children.append(legend_html)
+
+        # Calculate bounds from condition points
+        bounds = None
+        features = geojson.get("features", [])
+        if features:
+            lats = [f["geometry"]["coordinates"][1] for f in features]
+            lons = [f["geometry"]["coordinates"][0] for f in features]
+            bounds = [
+                [min(lats) - 0.005, min(lons) - 0.005],
+                [max(lats) + 0.005, max(lons) + 0.005],
+            ]
+
+        return (
+            result_ui,
+            condition_data,
+            _make_serializable({"summary": summary, "geojson": geojson}),
+            map_children,
+            bounds,
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return (
+            dbc.Alert(f"Video pipeline error: {str(e)}", color="danger"),
+            no_update, no_update, no_update, no_update,
+        )
+    finally:
+        for tmp in [video_tmp, gpx_tmp]:
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
 
 # --- Step 4: Cost per km ---
