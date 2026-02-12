@@ -55,9 +55,9 @@ def run_pipeline(
     t0 = time.time()
     is_dir = os.path.isdir(video_path)
     VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov")
-    MAX_TOTAL_SIZE = 500 * 1024 * 1024  # 500 MB
-    MAX_PER_CLIP_SIZE = 50 * 1024 * 1024  # 50 MB
-    MAX_CLIP_COUNT = 30
+    MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+    MAX_PER_CLIP_SIZE = 100 * 1024 * 1024  # 100 MB
+    MAX_CLIP_COUNT = 100
 
     # ── SIZE GUARDS ──────────────────────────────────────────────────
     warnings = []

@@ -183,22 +183,22 @@ def run_checks(geojson: dict, pipeline_result: dict = None) -> int:
 
         # Test 1: Too many clips (>30) — create temp dir with 31 tiny files
         tmp = tempfile.mkdtemp(prefix="tara_size_test_")
-        for i in range(31):
+        for i in range(101):
             with open(os.path.join(tmp, f"clip_{i:03d}.mp4"), "wb") as f:
                 f.write(b"\x00" * 100)
         result_count = run_pipeline(video_path=tmp, gpx_path=GPX_PATH, use_mock=True)
         if not result_count.get("error"):
-            print(f"[FAIL] 11. Size guards: Pipeline did not reject 31 clips")
+            print(f"[FAIL] 11. Size guards: Pipeline did not reject 101 clips")
             size_pass = False
 
         # Test 2: Single file >50MB — create large temp file
         big_file = os.path.join(tmp, "big.mp4")
         with open(big_file, "wb") as f:
-            f.seek(51 * 1024 * 1024)
+            f.seek(101 * 1024 * 1024)
             f.write(b"\x00")
         result_big = run_pipeline(video_path=big_file, gpx_path=GPX_PATH, use_mock=True)
         if not result_big.get("error"):
-            print(f"[FAIL] 11. Size guards: Pipeline did not reject 51MB clip")
+            print(f"[FAIL] 11. Size guards: Pipeline did not reject 101MB clip")
             size_pass = False
 
         # Cleanup
