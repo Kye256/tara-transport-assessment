@@ -6,8 +6,12 @@ Uses the Overpass API.
 
 import requests
 import math
+import time
+import logging
 from typing import Optional
 
+
+logger = logging.getLogger(__name__)
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
@@ -79,23 +83,23 @@ def find_facilities(
 ) -> dict:
     """
     Find facilities near a road corridor.
-    
+
     Args:
         bbox: Bounding box dict with south, north, west, east
         buffer_km: Buffer distance around corridor in km (default 5km)
         categories: List of categories to search (default: all)
         timeout: API timeout in seconds
-        
+
     Returns:
         dict with facilities grouped by category
     """
     if not bbox:
         return {"facilities": {}, "total_count": 0}
-    
+
     # Expand bbox by buffer
     lat_buffer = buffer_km / 111.0  # ~111km per degree latitude
     lon_buffer = buffer_km / (111.0 * math.cos(math.radians((bbox["south"] + bbox["north"]) / 2)))
-    
+
     expanded_bbox = (
         bbox["south"] - lat_buffer,
         bbox["west"] - lon_buffer,
@@ -103,11 +107,11 @@ def find_facilities(
         bbox["east"] + lon_buffer,
     )
     bbox_str = f"{expanded_bbox[0]},{expanded_bbox[1]},{expanded_bbox[2]},{expanded_bbox[3]}"
-    
+
     # Select categories
     if categories is None:
         categories = list(FACILITY_CATEGORIES.keys())
-    
+
     # Build single query for all facility types
     tag_queries = []
     for cat in categories:
@@ -115,7 +119,7 @@ def find_facilities(
             for tag in FACILITY_CATEGORIES[cat]["tags"]:
                 tag_queries.append(f'  node{tag}({bbox_str});')
                 tag_queries.append(f'  way{tag}({bbox_str});')
-    
+
     query = f"""
     [out:json][timeout:{timeout}];
     (
@@ -123,32 +127,50 @@ def find_facilities(
     );
     out center;
     """
-    
-    try:
-        response = requests.post(
-            OVERPASS_URL,
-            data={"data": query},
-            timeout=timeout,
-            headers={"User-Agent": "TARA Transport Assessment Agent/1.0"}
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Overpass API error: {e}")
-        return {"facilities": {cat: [] for cat in categories}, "total_count": 0}
-    
+
+    # Retry with exponential backoff: 3 attempts with 2s, 4s, 8s delays
+    max_attempts = 3
+    backoff_delays = [2, 4, 8]
+    data = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.post(
+                OVERPASS_URL,
+                data={"data": query},
+                timeout=timeout,
+                headers={"User-Agent": "TARA Transport Assessment Agent/1.0"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            break
+        except requests.exceptions.RequestException as e:
+            if attempt < max_attempts:
+                delay = backoff_delays[attempt - 1]
+                logger.warning(
+                    f"Overpass API error on attempt {attempt}/{max_attempts}: {e}. "
+                    f"Retrying in {delay}s..."
+                )
+                time.sleep(delay)
+            else:
+                logger.warning(
+                    f"Overpass API error on attempt {attempt}/{max_attempts}: {e}. "
+                    f"All {max_attempts} attempts failed."
+                )
+                return {"facilities": {cat: [] for cat in categories}, "total_count": 0}
+
     # Process results
     facilities = {cat: [] for cat in categories}
     seen_ids = set()
-    
+
     for element in data.get("elements", []):
         element_id = element["id"]
         if element_id in seen_ids:
             continue
         seen_ids.add(element_id)
-        
+
         tags = element.get("tags", {})
-        
+
         # Get coordinates (node has lat/lon directly, way has center)
         if element["type"] == "node":
             lat = element.get("lat")
@@ -157,10 +179,10 @@ def find_facilities(
             center = element.get("center", {})
             lat = center.get("lat")
             lon = center.get("lon")
-        
+
         if not lat or not lon:
             continue
-        
+
         # Categorize the facility
         category = _categorize_facility(tags)
         if category and category in facilities:
@@ -177,9 +199,9 @@ def find_facilities(
                 ]},
             }
             facilities[category].append(facility)
-    
+
     total = sum(len(v) for v in facilities.values())
-    
+
     return {
         "facilities": facilities,
         "total_count": total,
@@ -201,7 +223,7 @@ def _categorize_facility(tags: dict) -> Optional[str]:
     shop = tags.get("shop", "")
     highway = tags.get("highway", "")
     man_made = tags.get("man_made", "")
-    
+
     if amenity in ["hospital", "clinic", "doctors", "health_post"] or healthcare:
         return "health"
     elif amenity in ["school", "university", "college", "kindergarten"]:
@@ -214,7 +236,7 @@ def _categorize_facility(tags: dict) -> Optional[str]:
         return "transport"
     elif amenity == "place_of_worship":
         return "worship"
-    
+
     return None
 
 
@@ -222,7 +244,7 @@ def _get_subcategory(tags: dict) -> str:
     """Get a more specific subcategory label."""
     amenity = tags.get("amenity", "")
     healthcare = tags.get("healthcare", "")
-    
+
     subcategory_map = {
         "hospital": "Hospital",
         "clinic": "Health Clinic",
@@ -241,10 +263,10 @@ def _get_subcategory(tags: dict) -> str:
         "drinking_water": "Water Point",
         "water_point": "Water Point",
     }
-    
+
     if healthcare:
         return healthcare.replace("_", " ").title()
-    
+
     return subcategory_map.get(amenity, amenity.replace("_", " ").title())
 
 
@@ -252,26 +274,26 @@ def get_facilities_summary(facilities_data: dict) -> str:
     """Generate a human-readable summary of facilities found."""
     if facilities_data["total_count"] == 0:
         return "No facilities found in the search area."
-    
+
     parts = [
         f"**Facilities within {facilities_data['buffer_km']}km of corridor** "
         f"({facilities_data['total_count']} total):",
     ]
-    
+
     for category, items in facilities_data["facilities"].items():
         if items:
             cat_info = FACILITY_CATEGORIES.get(category, {})
             icon = cat_info.get("icon", "📍")
             named = [f["name"] for f in items if f["name"] != "Unnamed"]
-            
+
             line = f"- {icon} **{category.title()}:** {len(items)}"
             if named and len(named) <= 5:
                 line += f" ({', '.join(named)})"
             elif named:
                 line += f" (including {', '.join(named[:3])} and {len(named)-3} more)"
-            
+
             parts.append(line)
-    
+
     return "\n".join(parts)
 
 
@@ -284,7 +306,7 @@ def calculate_distances_to_road(facilities: list[dict], road_coords: list[tuple]
             if dist < min_dist:
                 min_dist = dist
         facility["distance_to_road_km"] = round(min_dist, 2)
-    
+
     return sorted(facilities, key=lambda f: f["distance_to_road_km"])
 
 
@@ -293,8 +315,8 @@ def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2 + 
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * 
+    a = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
          math.sin(dlon / 2) ** 2)
     c = 2 * math.asin(math.sqrt(a))
     return R * c
@@ -309,7 +331,7 @@ if __name__ == "__main__":
         "west": 32.55,
         "east": 32.62,
     }
-    
+
     print("Searching for facilities near Kasangati-Matugga corridor...")
     result = find_facilities(test_bbox, buffer_km=3.0)
     print(get_facilities_summary(result))

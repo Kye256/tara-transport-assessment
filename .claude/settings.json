@@ -1,0 +1,186 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '=== GIT STATUS ===' && git status --short && echo '=== RECENT COMMITS ===' && git log --oneline -5 && echo '=== TODO ===' && grep -n '\\- \\[ \\]' CLAUDE.md 2>/dev/null || echo 'No unchecked items found'"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash(npm install*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(npm run*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(npm test*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(npx *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(node *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(python *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(pip install*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(cat *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(ls*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(cd *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(echo *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(head *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(tail *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(grep *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(find *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(wc *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(mkdir *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(cp *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(mv *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(touch *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(chmod *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(curl *)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(git status*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(git log*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(git diff*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(git add*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(git commit*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(git stash*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Bash(git show*)",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [{ "type": "command", "command": "echo '{\"decision\": \"approve\"}'" }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // \"\"'); case \"$CMD\" in *rm\\ -rf*|*rm\\ -r*|*rmdir*) echo '{\"decision\": \"block\", \"reason\": \"Blocked: recursive delete not allowed\"}' ;; *git\\ push*|*git\\ push\\ *) echo '{\"decision\": \"block\", \"reason\": \"Blocked: pushing to remote not allowed\"}' ;; *git\\ checkout*|*git\\ checkout\\ *|*git\\ switch*|*git\\ switch\\ *|*git\\ branch\\ -d*|*git\\ branch\\ -D*|*git\\ branch\\ -m*) echo '{\"decision\": \"block\", \"reason\": \"Blocked: changing/deleting branches not allowed\"}' ;; *git\\ merge*|*git\\ rebase*|*git\\ reset\\ --hard*) echo '{\"decision\": \"block\", \"reason\": \"Blocked: destructive git operation not allowed\"}' ;; *) ;; esac"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Before finishing, critically review the work you just completed:\n1. Does the code run without errors? If you wrote code, did you test it?\n2. Are there obvious bugs, missing imports, or unhandled edge cases?\n3. Does it match what was asked for — nothing missing, nothing extra?\n4. Is the code clean and readable?\n5. Did you update CLAUDE.md if you completed a task or changed the architecture?\nIf ALL checks pass, respond 'complete'. If ANY issues remain, respond 'continue' and fix them before stopping."
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Evaluate the sub-agent's output critically:\n1. Does the code actually work — no syntax errors, no missing dependencies?\n2. Is the task fully complete or did the sub-agent cut corners?\n3. Does it integrate correctly with the rest of the project?\n4. Is the code quality acceptable — type hints, docstrings, no hardcoded values?\nIf the output meets all standards, respond 'accept'. If not, respond 'reject' and list the specific issues to fix."
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TIMESTAMP=$(date +%Y%m%d_%H%M%S) && BACKUP_DIR=\"$CLAUDE_PROJECT_DIR/.claude/session_backups\" && mkdir -p \"$BACKUP_DIR\" && cp \"$TRANSCRIPT_PATH\" \"$BACKUP_DIR/transcript_${TIMESTAMP}.jsonl\" 2>/dev/null && echo \"Transcript backed up to $BACKUP_DIR/transcript_${TIMESTAMP}.jsonl\" || echo 'Backup skipped — no transcript path available'"
+          }
+        ]
+      }
+    ]
+  }
+}

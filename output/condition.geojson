@@ -1,0 +1,297 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 5.5,
+        "surface_type": "paved",
+        "distress_types": [
+          "patching",
+          "cracking",
+          "raveling"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Narrow paved road with visible surface wear, patches, and minor deterioration in residential area.",
+        "frame_index": 0,
+        "timestamp_sec": 0.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 5.5,
+        "surface_type": "paved",
+        "distress_types": [
+          "cracking",
+          "patching"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Paved road with visible surface cracking and patches, moderate distress in residential area.",
+        "frame_index": 1,
+        "timestamp_sec": 5.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "good",
+        "color": "#2d5f4a",
+        "iri_estimate": 3.5,
+        "surface_type": "paved",
+        "distress_types": [
+          "none"
+        ],
+        "distress_severity": "none",
+        "notes": "Well-maintained paved road with clear markings in residential area with overhead power lines.",
+        "frame_index": 2,
+        "timestamp_sec": 10.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 5.5,
+        "surface_type": "paved",
+        "distress_types": [
+          "cracking",
+          "patching",
+          "raveling"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Paved road with visible surface deterioration, moderate cracking and patching evident, tree-lined residential area.",
+        "frame_index": 3,
+        "timestamp_sec": 15.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 5.5,
+        "surface_type": "paved",
+        "distress_types": [
+          "cracking",
+          "patching"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Paved road with moderate cracking visible, tropical vegetation and power lines present.",
+        "frame_index": 4,
+        "timestamp_sec": 20.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 9.5,
+        "surface_type": "earth",
+        "distress_types": [
+          "rutting",
+          "erosion"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Unpaved earth road with moderate surface wear, visible rutting and minor erosion patterns.",
+        "frame_index": 5,
+        "timestamp_sec": 25.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "poor",
+        "color": "#c4652a",
+        "iri_estimate": 13.5,
+        "surface_type": "earth",
+        "distress_types": [
+          "rutting",
+          "erosion",
+          "corrugation"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Unpaved earth road with visible rutting and uneven surface in residential area with power lines.",
+        "frame_index": 6,
+        "timestamp_sec": 30.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 9.5,
+        "surface_type": "earth",
+        "distress_types": [
+          "rutting",
+          "erosion"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Unpaved earth road with moderate rutting and visible erosion along edges and grassy verges.",
+        "frame_index": 7,
+        "timestamp_sec": 35.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 9.5,
+        "surface_type": "earth",
+        "distress_types": [
+          "rutting",
+          "erosion"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Unpaved earth road with visible ruts and drainage erosion, bordered by walls with security wire.",
+        "frame_index": 8,
+        "timestamp_sec": 40.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 5.2,
+        "surface_type": "paved",
+        "distress_types": [
+          "patching",
+          "cracking",
+          "raveling"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Paved road with visible patching and surface wear, moderate distress in residential area.",
+        "frame_index": 9,
+        "timestamp_sec": 45.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 9.5,
+        "surface_type": "earth",
+        "distress_types": [
+          "corrugation",
+          "erosion"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Unpaved earth road with moderate surface irregularities and visible wear patterns in residential area.",
+        "frame_index": 10,
+        "timestamp_sec": 50.0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.639612725311125,
+          0.36717948190337724
+        ]
+      },
+      "properties": {
+        "condition_class": "fair",
+        "color": "#9a6b2f",
+        "iri_estimate": 9.5,
+        "surface_type": "earth",
+        "distress_types": [
+          "rutting",
+          "corrugation",
+          "erosion"
+        ],
+        "distress_severity": "moderate",
+        "notes": "Unpaved earth road with visible ruts and moderate surface irregularities in residential area.",
+        "frame_index": 11,
+        "timestamp_sec": 55.0
+      }
+    }
+  ]
+}

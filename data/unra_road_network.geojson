@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<!--[if IE 7]> <html lang="en_AU" class="ie ie7"> <![endif]-->
+<!--[if IE 8]> <html lang="en_AU" class="ie ie8"> <![endif]-->
+<!--[if IE 9]> <html lang="en_AU" class="ie9"> <![endif]-->
+<!--[if gt IE 8]><!--> <html lang="en_AU"> <!--<![endif]-->
+  <head>
+
+    <script type="application/javascript">
+      /**
+       * A map holding all the information to be sent to the analytics servers
+       * @type {object}
+       */
+      var analyticsInfo = {
+          'organizationName': 'None',
+          'organizationId': 'None',
+          'groupNames': [],
+          'groupIds': [],
+          'isCod': null,
+          'isIndicator': null,
+          'isArchived': null,
+          'datasetName': 'None',
+          'datasetId': 'None',
+          'pageTitle': 'Error',
+          'datasetAvailability': 'None',
+          'cameFrom': '',
+          'supportsNotifications': '',
+          'authenticated': 'false',
+          'accountType': '',
+      };
+    </script>
+
+    
+        <!-- start Mixpanel -->
+<script type="text/javascript">
+    (function (e, b) {
+        if (!b.__SV) {
+            var a, f, i, g;
+            window.mixpanel = b;
+            b._i = [];
+            b.init = function (a, e, d) {
+                function f(b, h) {
+                    var a = h.split(".");
+                    2 == a.length && (b = b[a[0]], h = a[1]);
+                    b[h] = function () {
+                        b.push([h].concat(Array.prototype.slice.call(arguments, 0)))
+                    }
+                }
+
+                var c = b;
+                "undefined" !== typeof d ? c = b[d] = [] : d = "mixpanel";
+                c.people = c.people || [];
+                c.toString = function (b) {
+                    var a = "mixpanel";
+                    "mixpanel" !== d && (a += "." + d);
+                    b || (a += " (stub)");
+                    return a
+                };
+                c.people.toString = function () {
+                    return c.toString(1) + ".people (stub)"
+                };
+                i = "disable time_event track track_pageview track_links track_forms register register_once alias unregister identify name_tag set_config reset people.set people.set_once people.increment people.append people.union people.track_charge people.clear_charges people.delete_user".split(" ");
+                for (g = 0; g < i.length; g++)f(c, i[g]);
+                b._i.push([a, e, d])
+            };
+            b.__SV = 1.2;
+            a = e.createElement("script");
+            a.type = "text/javascript";
+            a.async = !0;
+            a.src = "undefined" !== typeof MIXPANEL_CUSTOM_LIB_URL ? MIXPANEL_CUSTOM_LIB_URL : "file:" === e.location.protocol && "//cdn.mxpnl.com/libs/mixpanel-2-latest.min.js".match(/^\/\//) ? "https://cdn.mxpnl.com/libs/mixpanel-2-latest.min.js" : "//cdn.mxpnl.com/libs/mixpanel-2-latest.min.js";
+            f = e.getElementsByTagName("script")[0];
+            f.parentNode.insertBefore(a, f)
+        }
+    })(document, window.mixpanel || []);
+    mixpanel.init("5cbf12bc9984628fb2c55a49daf32e74");
+
+    var mixpanelTrackData = {
+      "page title": analyticsInfo.pageTitle,
+      "org name": analyticsInfo.organizationName,
+      "org id": analyticsInfo.organizationId,
+      "group names": analyticsInfo.groupNames,
+      "group ids": analyticsInfo.groupIds,
+      "authenticated": analyticsInfo.authenticated,
+      "dataset availability": analyticsInfo.datasetAvailability,
+      "is cod": analyticsInfo.isCod,
+      "is indicator": analyticsInfo.isIndicator,
+      "is archived": analyticsInfo.isArchived,
+      "dataset id": analyticsInfo.datasetId,
+      "dataset name": analyticsInfo.datasetName,
+      "came from": analyticsInfo.cameFrom,
+      "supports notifications": analyticsInfo.supportsNotifications,
+    };
+
+    if(analyticsInfo.accountType) {
+      mixpanelTrackData['account type'] = analyticsInfo.accountType;
+    }
+
+    mixpanel.track("page view", mixpanelTrackData);
+</script>
+<!-- end Mixpanel -->
+    
+
+    
+      <!-- Google Tag Manager - DATALAYER -->
+      <script type="application/javascript">
+        window.dataLayer = window.dataLayer || [];
+
+        <!-- Google Analytics - custom properties (dimensions) -->
+        (function() {
+            if (analyticsInfo.organizationName !== 'None') {
+                dataLayer.push({
+                  'org_name': analyticsInfo.organizationName
+                });
+            }
+
+            
+
+            var locationNames = analyticsInfo.groupNames.length < 15 ? analyticsInfo.groupNames.join('~') : 'many';
+            if (locationNames) {
+                dataLayer.push({
+                  'location_names': locationNames
+                });
+            }
+        }());
+        <!-- END - Google Analytics - custom properties (dimensions) -->
+      </script>
+      <!-- Google Tag Manager -->
+      <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+      new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+      j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+      'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+      })(window,document,'script','dataLayer','GTM-MFNPQ7K');</script>
+      <!-- End Google Tag Manager -->
+
+    
+
+    
+    
+    
+    <meta charset="utf-8" />
+
+      <meta name="csrf_field_name" content="_csrf_token" />
+      <meta name="_csrf_token" content="ImI3N2Y3NDQ4M2U1NjhiYTVlNGQ0N2E0N2E5YTA3MzI1MGVhOGJlMTQi.aYzomQ.X6OhZ6x2nSz1_D-96bnvwLAY4s8" />
+
+      <meta name="referrer" content="always">
+      <meta name="generator" content="ckan " />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Error  | HDX</title>
+
+    
+
+    <meta property="og:image" content="https://data.humdata.org/images/hxl_fb-01.png">
+    <meta property="og:image:type" content="image/jpeg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+
+    
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+      <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+      <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+      <link rel="manifest" href="/site.webmanifest">
+      
+      <meta name="msapplication-TileColor" content="#da532c">
+      <meta name="theme-color" content="#ffffff">
+      <link rel="search" type="application/opensearchdescription+xml" title="HDX Search" href="/xml/opensearch.xml">
+    
+  
+    
+  
+  
+    
+  
+
+
+    
+      
+      
+    
+
+    <link rel=preconnect href="https://fonts.gstatic.com" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    
+    <link href="/webassets/ckanext-hdx_theme/1a955e59_page-common-styles.css" rel="stylesheet"/>
+<link href="/webassets/ckanext-hdx_theme/bf727195_search-styles.css" rel="stylesheet"/>
+<link href="/webassets/ckanext-hdx_theme/b5322a56_adaptive-page-styles.css" rel="stylesheet"/>
+<link href="/webassets/ckanext-hdx_theme/c1819151_page-light-styles.css" rel="stylesheet"/>
+<link href="/webassets/ckanext-hdx_theme/cddb38c2_popup-styles.css" rel="stylesheet"/>
+<link href="/widget/onboarding/onboarding.css" rel="stylesheet"/>
+<link href="/widget/onboarding/two-column.css" rel="stylesheet"/>
+<link href="/widget/onboarding/notification.css" rel="stylesheet"/>
+<link href="/widget/onboarding/logout.css" rel="stylesheet"/>
+<link href="/widget/onboarding/login.css" rel="stylesheet"/>
+<link href="/webassets/ckanext-hdx_theme/926db7ac_onboarding-verify-styles.css" rel="stylesheet"/>
+<link href="/webassets/ckanext-hdx_theme/57be9676_onboarding-survey-styles.css" rel="stylesheet"/>
+<link href="/webassets/ckanext-hdx_theme/d41d8cd9_onboarding-anon.css" rel="stylesheet"/>
+    
+  </head>
+
+  
+  <body data-site-root="/" data-locale-root="/" data-api-root="" class="home responsive">
+    <!-- Google Tag Manager (noscript) -->
+    <noscript>
+      <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-MFNPQ7K" height="0" width="0" style="display:none;visibility:hidden"></iframe>
+    </noscript>
+    <!-- End Google Tag Manager (noscript) -->
+
+    
+  <div id="error-page">
+    <div class="error-message-container">
+      <div>
+        <img src="/images/page404/hdx_bot2.gif">
+      </div>
+      <div>
+        <h1>
+          
+            Page not found
+          
+        </h1>
+      </div>
+      <div>
+        <p>
+          
+            Sorry, the page you are looking for could not be found. <br>
+            Please check the URL or login to HDX if you know that you have a permission to see this page.
+          
+        </p>
+      </div>
+      <div>
+        <a href="/" class="btn btn-primary hdx-btn btn-large">Back to homepage</a>
+      </div>
+    </div>
+
+  </div>
+
+     
+  
+  
+
+
+
+
+  <link rel=preconnect href="https://fonts.gstatic.com" />
+  
+  
+      
+      
+
+    
+  
+    
+  
+
+      
+
+    
+    
+    <link href="/webassets/vendor/53df638c_fontawesome.css" rel="stylesheet"/>
+    <script src="/base/vendor/jed.js" type="text/javascript"></script>
+<script src="/base/vendor/moment-with-locales.js" type="text/javascript"></script>
+<script src="/base/vendor/popperjs.js" type="text/javascript"></script>
+<script src="/base/vendor/purify.js" type="text/javascript"></script>
+<script src="/base/vendor/jquery.js" type="text/javascript"></script>
+<script src="/webassets/vendor/240e5086_jquery.js" type="text/javascript"></script>
+<script src="/webassets/vendor/6d1ad7e6_bootstrap.js" type="text/javascript"></script>
+<script src="/webassets/base/88c359cd_main.js" type="text/javascript"></script>
+<script src="/webassets/ckanext-hdx_theme/0aa93c28_ckan.js" type="text/javascript"></script>
+<script src="/webassets/ckanext-hdx_theme/bcc55700_jquery-extra.js" type="text/javascript"></script>
+<script src="/hdx_show_more.js" type="text/javascript"></script>
+<script src="/hdx_show_more_lines.js" type="text/javascript"></script>
+<script src="/webassets/ckanext-hdx_theme/d408861e_page-light-scripts.js" type="text/javascript"></script>
+<script src="/webassets/ckanext-hdx_theme/ef069373_popup-scripts.js" type="text/javascript"></script>
+<script src="/webassets/ckanext-hdx_theme/db2e72ca_onboarding-scripts.js" type="text/javascript"></script>
+<script src="/webassets/ckanext-hdx_theme/d26b4b4f_onboarding-password-scripts.js" type="text/javascript"></script>
+  </body>
+  
+  
+</html>
