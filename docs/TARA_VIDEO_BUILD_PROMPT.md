@@ -179,14 +179,19 @@ def assess_frame_mock(image_base64: str) -> dict:
 
 ### Sub-Agent 4: Map Output & Integration (`video_map.py`)
 
-**Scope:** Convert assessed frames to map-ready output for dash-leaflet.
+**Scope:** Convert assessed frames to map-ready GeoJSON for dash-leaflet, with popup interaction.
 
 **Build this:**
 ```python
-def frames_to_geojson(assessed_frames: list[dict]) -> dict:
+def frames_to_condition_geojson(assessed_frames: list[dict]) -> dict:
     """
-    Convert assessed frames to GeoJSON FeatureCollection.
-    Each frame becomes a Point feature with condition properties.
+    Convert assessed frames into color-coded LineString sections for the map.
+    
+    Logic:
+    1. Group consecutive frames with the same condition_class into sections
+    2. Each section becomes a GeoJSON LineString (start coord → end coord)
+    3. If only one frame in a section, make a very short LineString 
+       (duplicate the point with tiny offset)
     
     Color mapping:
         good  → #2d5f4a  (TARA green)
@@ -194,23 +199,88 @@ def frames_to_geojson(assessed_frames: list[dict]) -> dict:
         poor  → #c4652a  (orange)
         bad   → #a83a2f  (TARA red)
     
-    Returns: GeoJSON dict ready for dl.GeoJSON in Dash
+    Each feature's properties:
+        condition_class, color, weight (line thickness: 6px),
+        avg_iri, surface_type, distress_types (joined as string),
+        notes, section_index,
+        frame_indices (list of frame indices in this section),
+        representative_frame_index (middle frame of the section),
+        popup_html (pre-built HTML string for dl.Popup — see below)
+    
+    Returns: GeoJSON FeatureCollection dict
     """
 
-def generate_condition_narrative(summary: dict, anthropic_client) -> str:
+def build_popup_html(frame: dict) -> str:
+    """
+    Build HTML string for a dash-leaflet popup when user clicks a section.
+    
+    The popup shows:
+    - Dashcam frame thumbnail (base64 img tag, max 300px wide)
+    - Condition badge (colored pill: green/amber/orange/red)
+    - Key stats: surface type, IRI estimate, distress types
+    - Claude's notes
+    
+    Example output:
+    <div style="font-family: 'Source Sans 3', sans-serif; max-width: 320px;">
+      <img src="data:image/jpeg;base64,..." style="width:300px; border-radius:3px;" />
+      <div style="margin-top:8px;">
+        <span style="background:#a83a2f; color:white; padding:2px 8px; 
+              border-radius:2px; font-size:11px; font-weight:600;">POOR</span>
+        <span style="color:#5c5950; font-size:12px; margin-left:8px;">IRI ~12 m/km</span>
+      </div>
+      <div style="font-size:12px; color:#2c2a26; margin-top:6px;">
+        Gravel surface · Pothole, edge break
+      </div>
+      <div style="font-size:11px; color:#8a8578; margin-top:4px;">
+        Laterite surface with moderate potholing, no drainage visible
+      </div>
+    </div>
+    
+    Returns: HTML string
+    """
+
+def generate_condition_narrative(summary: dict, anthropic_client, use_mock: bool = False) -> str:
     """
     Send summary stats to Claude, get a 2-3 paragraph condition narrative.
-    This is displayed in TARA's AI analysis panel.
+    This is displayed in TARA's AI analysis panel with typing animation.
     
     Returns: narrative string
     """
+
+def build_condition_summary_panel(summary: dict) -> dict:
+    """
+    Build the data needed for the left panel condition display.
+    
+    Returns: {
+        "total_distance_km": 4.66,
+        "average_iri": 9.3,
+        "dominant_surface": "gravel",
+        "dominant_condition": "poor",
+        "condition_percentages": {"good": 15, "fair": 25, "poor": 45, "bad": 15},
+        "key_issues": ["pothole", "edge_break", "erosion"],
+        "worst_section_notes": "Section 3 near km 2.5 shows severe..."
+    }
+    """
 ```
 
-**Requirements:**
-- GeoJSON Points (not LineStrings — simpler, works immediately)
-- Each feature's properties: `condition_class, color, iri_estimate, surface_type, distress_types, notes, frame_index, timestamp_sec`
-- `generate_condition_narrative` sends the summary dict to Claude (text, not vision) and asks for a professional road condition assessment narrative suitable for inclusion in an appraisal report
-- Include a mock narrative function for testing without API
+**Map interaction (how it works in dash-leaflet):**
+- The GeoJSON is rendered as `dl.GeoJSON` with `style` function reading `color` and `weight` from feature properties
+- Each LineString feature has a `dl.Popup` child containing the `popup_html`
+- User clicks a colored section → popup appears with dashcam frame + assessment
+- No server callback needed for the popup — it's all in the GeoJSON properties
+
+**Left panel after processing shows:**
+- Condition bar: horizontal stacked bar (div with colored segments proportional to %)
+- Stats table: distance, avg IRI, surface, key issues
+- AI narrative with typing animation (existing pattern from the app)
+- "Use for CBA →" button to proceed to Step 3
+
+**Design rules (from TARA UI spec):**
+- Border radius: 3px max
+- Colors: use the TARA palette (see color mapping above)
+- Typography: Source Sans 3 for text, DM Mono for data/numbers
+- Tables over cards for data display
+- Data attribution: 8-9px mono below tables
 
 ---
 
@@ -241,8 +311,9 @@ def run_pipeline(video_path: str, gpx_path: str,
     Returns: {
         "frames": [...],          # all frame data with GPS + assessments
         "summary": {...},         # condition statistics
-        "geojson": {...},         # map-ready GeoJSON
-        "narrative": "...",       # AI condition narrative
+        "geojson": {...},         # map-ready GeoJSON with LineString sections + popup HTML
+        "narrative": "...",       # AI condition narrative (for typing animation)
+        "panel_data": {...},      # pre-built data for left panel (from build_condition_summary_panel)
         "metadata": {
             "video_file": "...",
             "gpx_file": "...",
