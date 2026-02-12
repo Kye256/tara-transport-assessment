@@ -54,9 +54,9 @@ def run_pipeline(
     t0 = time.time()
     is_dir = os.path.isdir(video_path)
     VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov")
-    MAX_TOTAL_SIZE = 500 * 1024 * 1024  # 500 MB
-    MAX_PER_CLIP_SIZE = 50 * 1024 * 1024  # 50 MB
-    MAX_CLIP_COUNT = 30
+    MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+    MAX_PER_CLIP_SIZE = 100 * 1024 * 1024  # 100 MB
+    MAX_CLIP_COUNT = 60
 
     # ── SIZE GUARDS ──────────────────────────────────────────────────
     warnings = []
@@ -80,7 +80,7 @@ def run_pipeline(
             if clip_count_check > MAX_CLIP_COUNT:
                 return {
                     "error": True,
-                    "message": f"Too many clips ({clip_count_check}). Maximum is 30.",
+                    "message": f"Too many clips ({clip_count_check}). Maximum is {MAX_CLIP_COUNT}.",
                 }
 
             # Total size check
@@ -88,7 +88,7 @@ def run_pipeline(
             if total_size > MAX_TOTAL_SIZE:
                 return {
                     "error": True,
-                    "message": f"Total video size is {size_gb:.1f}GB. Maximum recommended is 500MB. Please compress clips first.",
+                    "message": f"Total video size is {size_gb:.1f}GB. Maximum recommended is {MAX_TOTAL_SIZE // (1024**2)}MB. Please compress clips first.",
                 }
 
             # Per-clip size check
@@ -111,7 +111,7 @@ def run_pipeline(
             if total_size > MAX_TOTAL_SIZE:
                 return {
                     "error": True,
-                    "message": f"Total video size is {size_gb:.1f}GB. Maximum recommended is 500MB. Please compress clips first.",
+                    "message": f"Total video size is {size_gb:.1f}GB. Maximum recommended is {MAX_TOTAL_SIZE // (1024**2)}MB. Please compress clips first.",
                 }
             if total_size > MAX_PER_CLIP_SIZE:
                 size_mb_clip = total_size / (1024 ** 2)

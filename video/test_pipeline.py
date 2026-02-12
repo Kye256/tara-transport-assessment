@@ -239,7 +239,6 @@ def main():
         frame_interval=30,
         max_frames=40,
         use_mock=True,
-        skip_size_guards=True,
     )
     elapsed = time.time() - t0
     print(f"\nPipeline ran in {elapsed:.1f}s")
