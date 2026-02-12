@@ -206,15 +206,17 @@ def build_step2():
             dbc.Col([
                 dcc.Upload(
                     id="dashcam-video-upload",
-                    children=dbc.Button("Upload MP4 Video", color="outline-primary", size="sm"),
+                    children=dbc.Button("Upload MP4 Video(s)", color="outline-primary", size="sm"),
                     accept=".mp4,.MP4,.avi,.mov",
+                    multiple=True,
                 ),
             ], md=4),
             dbc.Col([
                 dcc.Upload(
                     id="gpx-upload",
-                    children=dbc.Button("Upload GPX Track", color="outline-primary", size="sm"),
+                    children=dbc.Button("Upload GPX Track(s)", color="outline-primary", size="sm"),
                     accept=".gpx",
+                    multiple=True,
                 ),
             ], md=4),
             dbc.Col([
@@ -773,9 +775,20 @@ def update_video_upload_status(video_filename, gpx_filename):
     """Show which files are uploaded and enable the run button when both present."""
     parts = []
     if video_filename:
-        parts.append(html.Small(f"Video: {video_filename}", className="text-success me-3"))
+        # Handle both single file (str) and multiple files (list)
+        if isinstance(video_filename, list):
+            count = len(video_filename)
+            label = f"{count} video file{'s' if count != 1 else ''}"
+        else:
+            label = video_filename
+        parts.append(html.Small(f"Video: {label}", className="text-success me-3"))
     if gpx_filename:
-        parts.append(html.Small(f"GPX: {gpx_filename}", className="text-success"))
+        if isinstance(gpx_filename, list):
+            count = len(gpx_filename)
+            label = f"{count} GPX file{'s' if count != 1 else ''}"
+        else:
+            label = gpx_filename
+        parts.append(html.Small(f"GPX: {label}", className="text-success"))
     both_ready = bool(video_filename and gpx_filename)
     return html.Div(parts), not both_ready
 
@@ -803,39 +816,53 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
     if not n_clicks or not video_contents or not gpx_contents:
         return no_update, no_update, no_update, no_update, no_update
 
-    # Decode and save video to temp file
-    _, video_b64 = video_contents.split(",", 1)
-    video_ext = video_filename.split(".")[-1].lower() if video_filename else "mp4"
-    video_decoded = base64.b64decode(video_b64)
+    # Normalize to lists (Dash sends scalar for single file, list for multiple)
+    if not isinstance(video_contents, list):
+        video_contents = [video_contents]
+        video_filename = [video_filename]
+    if not isinstance(gpx_contents, list):
+        gpx_contents = [gpx_contents]
+        gpx_filename = [gpx_filename]
 
-    # Decode and save GPX to temp file
-    _, gpx_b64 = gpx_contents.split(",", 1)
-    gpx_decoded = base64.b64decode(gpx_b64)
-
-    video_tmp = None
-    gpx_tmp = None
+    tmp_dir = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{video_ext}") as f:
-            f.write(video_decoded)
-            video_tmp = f.name
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".gpx") as f:
-            f.write(gpx_decoded)
-            gpx_tmp = f.name
+        tmp_dir = tempfile.mkdtemp(prefix="tara_upload_")
+        tmp_video_dir = os.path.join(tmp_dir, "videos")
+        tmp_gpx_dir = os.path.join(tmp_dir, "gpx")
+        os.makedirs(tmp_video_dir)
+        os.makedirs(tmp_gpx_dir)
 
-        # Extract video start time from filename (e.g. 2026_02_12_144138_00.MP4)
-        video_start_time = None
-        if video_filename:
-            try:
-                from video.run_all import extract_start_time
-                video_start_time = extract_start_time(video_filename)
-            except Exception:
-                pass
+        # Write all video files to temp video directory
+        for contents, fname in zip(video_contents, video_filename):
+            _, b64 = contents.split(",", 1)
+            decoded = base64.b64decode(b64)
+            out_path = os.path.join(tmp_video_dir, fname)
+            with open(out_path, "wb") as f:
+                f.write(decoded)
+
+        # Write all GPX files to temp gpx directory
+        for contents, fname in zip(gpx_contents, gpx_filename):
+            _, b64 = contents.split(",", 1)
+            decoded = base64.b64decode(b64)
+            out_path = os.path.join(tmp_gpx_dir, fname)
+            with open(out_path, "wb") as f:
+                f.write(decoded)
+
+        # Use directory paths if multiple files, single file path otherwise
+        if len(video_filename) == 1:
+            video_path = os.path.join(tmp_video_dir, video_filename[0])
+        else:
+            video_path = tmp_video_dir
+
+        if len(gpx_filename) == 1:
+            gpx_path = os.path.join(tmp_gpx_dir, gpx_filename[0])
+        else:
+            gpx_path = tmp_gpx_dir
 
         from video.video_pipeline import run_pipeline
         result = run_pipeline(
-            video_path=video_tmp,
-            gpx_path=gpx_tmp,
-            video_start_time=video_start_time,
+            video_path=video_path,
+            gpx_path=gpx_path,
             frame_interval=5,
             max_frames=20,
             use_mock=False,
@@ -845,19 +872,33 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
         geojson = result["geojson"]
         narrative = result.get("narrative", "")
         metadata = result.get("metadata", {})
+        panel_data = result.get("panel_data", {})
 
         # --- Build result UI ---
-        condition_dist = summary.get("condition_distribution", {})
-        dist_badges = []
-        badge_colors = {"good": "success", "fair": "warning", "poor": "danger", "bad": "danger"}
-        for cond, count in condition_dist.items():
-            dist_badges.append(
-                dbc.Badge(f"{cond}: {count}", color=badge_colors.get(cond, "secondary"),
-                          className="me-1")
-            )
-
         distress_list = summary.get("distress_types_found", [])
         distress_str = ", ".join(d.replace("_", " ").title() for d in distress_list) if distress_list else "None"
+
+        # Condition bar — horizontal stacked bar from panel_data percentages
+        cond_pcts = panel_data.get("condition_percentages", {})
+        bar_colors = {"good": "#2d5f4a", "fair": "#9a6b2f", "poor": "#c4652a", "bad": "#a83a2f"}
+        bar_segments = []
+        for cond in ["good", "fair", "poor", "bad"]:
+            pct = cond_pcts.get(cond, 0)
+            if pct > 0:
+                bar_segments.append(html.Div(
+                    f"{pct}%",
+                    style={
+                        "width": f"{pct}%", "background": bar_colors[cond],
+                        "color": "white", "textAlign": "center",
+                        "fontSize": "0.7rem", "fontWeight": "600",
+                        "padding": "2px 0", "display": "inline-block",
+                    },
+                ))
+        condition_bar = html.Div(
+            bar_segments,
+            style={"display": "flex", "borderRadius": "3px", "overflow": "hidden",
+                   "height": "22px", "marginBottom": "8px"},
+        ) if bar_segments else html.Div()
 
         result_ui = html.Div([
             dbc.Alert([
@@ -875,7 +916,7 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
                              "success" if summary.get("dominant_condition") == "good" else "warning"),
                 _metric_card("Frames", str(summary.get("total_frames_assessed", 0)), "primary"),
             ], className="tara-metric-row"),
-            html.Div(dist_badges, className="mb-2"),
+            condition_bar,
             html.Small(f"Distress: {distress_str}", className="text-muted d-block mb-2"),
             dbc.Card(dbc.CardBody([
                 html.H6("Condition Narrative"),
@@ -921,21 +962,30 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
         })
         map_children.append(legend_html)
 
-        # Calculate bounds from condition points
+        # Calculate bounds from condition sections (LineString or Point)
         bounds = None
         features = geojson.get("features", [])
         if features:
-            lats = [f["geometry"]["coordinates"][1] for f in features]
-            lons = [f["geometry"]["coordinates"][0] for f in features]
-            bounds = [
-                [min(lats) - 0.005, min(lons) - 0.005],
-                [max(lats) + 0.005, max(lons) + 0.005],
-            ]
+            all_lats, all_lons = [], []
+            for feat in features:
+                geom = feat["geometry"]
+                if geom["type"] == "LineString":
+                    for coord in geom["coordinates"]:
+                        all_lons.append(coord[0])
+                        all_lats.append(coord[1])
+                elif geom["type"] == "Point":
+                    all_lons.append(geom["coordinates"][0])
+                    all_lats.append(geom["coordinates"][1])
+            if all_lats:
+                bounds = [
+                    [min(all_lats) - 0.005, min(all_lons) - 0.005],
+                    [max(all_lats) + 0.005, max(all_lons) + 0.005],
+                ]
 
         return (
             result_ui,
             condition_data,
-            _make_serializable({"summary": summary, "geojson": geojson}),
+            _make_serializable({"summary": summary, "geojson": geojson, "panel_data": panel_data}),
             map_children,
             bounds,
         )
@@ -948,12 +998,12 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
             no_update, no_update, no_update, no_update,
         )
     finally:
-        for tmp in [video_tmp, gpx_tmp]:
-            if tmp:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
+        if tmp_dir:
+            import shutil
+            try:
+                shutil.rmtree(tmp_dir)
+            except OSError:
+                pass
 
 
 # --- Step 4: Cost per km ---

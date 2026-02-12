@@ -12,6 +12,8 @@ build/
 
 # Data files (raw/large — only processed GeoJSON goes in repo)
 data/videos/
+data/dashcam/
+data/gpx/
 data/worldpop/*.tif
 data/hotosm_uga_roads.zip
 data/*.shp
