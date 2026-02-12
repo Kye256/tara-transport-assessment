@@ -84,6 +84,40 @@ def parse_gpx_folder(gpx_path: str) -> list[dict]:
     return all_trackpoints
 
 
+def get_trackpoints_between(
+    trackpoints: list[dict],
+    start_epoch: float,
+    end_epoch: float,
+) -> list[list[float]]:
+    """Get all GPX trackpoints between two timestamps as [lon, lat] coordinates.
+
+    Returns all trackpoints whose time falls between start_epoch and end_epoch
+    (inclusive), as [lon, lat] pairs suitable for GeoJSON coordinates.
+
+    This is critical for building dense LineStrings that follow the actual road
+    rather than drawing straight lines between frame GPS points.
+
+    Args:
+        trackpoints: list of trackpoint dicts from parse_gpx / parse_gpx_folder,
+            each containing 'lat', 'lon', and 'time' (datetime) keys.
+        start_epoch: start of the time window (seconds since Unix epoch, inclusive).
+        end_epoch: end of the time window (seconds since Unix epoch, inclusive).
+
+    Returns:
+        List of [lon, lat] pairs (GeoJSON coordinate order) for every trackpoint
+        whose timestamp falls within the window.  Empty list if none match.
+    """
+    coords: list[list[float]] = []
+    for tp in trackpoints:
+        t = tp.get("time")
+        if t is None:
+            continue
+        ts = t.timestamp()
+        if start_epoch <= ts <= end_epoch:
+            coords.append([tp["lon"], tp["lat"]])
+    return coords
+
+
 def match_frames_to_gps(
     frames: list[dict],
     trackpoints: list[dict],

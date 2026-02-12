@@ -24,6 +24,8 @@ def run_pipeline(
     max_frames: int = 20,
     use_mock: bool = False,
     api_key: str = None,
+    progress_callback=None,
+    skip_size_guards: bool = False,
 ) -> dict:
     """Run the full dashcam analysis pipeline.
 
@@ -36,152 +38,263 @@ def run_pipeline(
         max_frames: cap on frames to send to Vision API
         use_mock: if True, skip real API calls
         api_key: Anthropic API key (reads from env if not provided)
+        progress_callback: optional callable(stage: int, message: str)
+            for reporting progress to the UI.
+        skip_size_guards: if True, skip size/count validation (for testing).
 
     Returns dict with frames, summary, geojson, narrative, metadata.
     """
+
+    # --- Progress helper ---
+    def progress(stage: int, message: str):
+        if progress_callback:
+            progress_callback(stage, message)
+        print(message)
+
     t0 = time.time()
     is_dir = os.path.isdir(video_path)
+    VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov")
+    MAX_TOTAL_SIZE = 500 * 1024 * 1024  # 500 MB
+    MAX_PER_CLIP_SIZE = 50 * 1024 * 1024  # 50 MB
+    MAX_CLIP_COUNT = 30
 
-    print("\n[TARA Video Pipeline]")
-    print("\u2500" * 21)
+    # ── SIZE GUARDS ──────────────────────────────────────────────────
+    warnings = []
+    size_mb = 0
+    n_clips = 1
+
     if is_dir:
-        mp4_count = len([f for f in os.listdir(video_path) if f.lower().endswith((".mp4", ".avi", ".mov"))])
-        print(f"Mode: Multi-clip ({mp4_count} files)")
-    else:
-        print(f"Mode: Single file")
-
-    # --- Stage 1: Extract frames ---
-    print("Stage 1/5: Extracting frames...")
-    frames = extract_frames(video_path, interval_seconds=frame_interval)
-    if frames:
-        duration_min = frames[-1]["timestamp_sec"] / 60
-    else:
-        duration_min = 0
-    clip_count = len(set(f.get("clip_filename", "") for f in frames))
-    print(f"  \u2192 Extracted {len(frames)} frames from {clip_count} clip(s) "
-          f"(every {frame_interval}s, {duration_min:.1f} min total)")
-
-    # --- Stage 2: Parse GPS ---
-    print("Stage 2/5: Parsing GPS track...")
-    trackpoints = parse_gpx_folder(gpx_path)
-    total_dist_m = 0.0
-    for i in range(1, len(trackpoints)):
-        total_dist_m += haversine(
-            trackpoints[i - 1]["lat"], trackpoints[i - 1]["lon"],
-            trackpoints[i]["lat"], trackpoints[i]["lon"],
+        video_files = sorted(
+            f for f in os.listdir(video_path)
+            if f.lower().endswith(VIDEO_EXTENSIONS)
         )
-    total_dist_km = total_dist_m / 1000
-    tp_duration = 0.0
-    if len(trackpoints) >= 2 and trackpoints[0]["time"] and trackpoints[-1]["time"]:
-        tp_duration = (trackpoints[-1]["time"] - trackpoints[0]["time"]).total_seconds() / 60
-    print(f"  \u2192 {len(trackpoints)} trackpoints over {tp_duration:.1f} minutes, {total_dist_km:.2f} km")
+        clip_count_check = len(video_files)
+        total_size = sum(
+            os.path.getsize(os.path.join(video_path, f)) for f in video_files
+        )
+        size_mb = total_size / (1024 ** 2)
+        n_clips = clip_count_check
 
-    # --- Stage 3: Match frames to GPS ---
-    print("Stage 3/5: Matching frames to GPS...")
+        if not skip_size_guards:
+            # Clip count check
+            if clip_count_check > MAX_CLIP_COUNT:
+                return {
+                    "error": True,
+                    "message": f"Too many clips ({clip_count_check}). Maximum is 30.",
+                }
 
-    # Auto-detect video_start_time from first clip filename if not provided
-    if video_start_time is None and frames:
-        first_clip = frames[0].get("clip_filename", "")
-        auto_time = extract_start_time_from_filename(first_clip)
-        if auto_time:
-            video_start_time = auto_time
-            print(f"  Auto-detected start time from filename: {video_start_time}")
+            # Total size check
+            size_gb = total_size / (1024 ** 3)
+            if total_size > MAX_TOTAL_SIZE:
+                return {
+                    "error": True,
+                    "message": f"Total video size is {size_gb:.1f}GB. Maximum recommended is 500MB. Please compress clips first.",
+                }
 
-    # For multi-clip, match per-clip using each clip's own start time
-    clips = {}
-    for f in frames:
-        clips.setdefault(f.get("clip_filename", ""), []).append(f)
-
-    if len(clips) > 1:
-        # Per-clip GPS matching
-        for clip_filename, clip_frames in clips.items():
-            clip_start = clip_frames[0].get("video_start_time")
-            if clip_start is None:
-                clip_start = video_start_time
-            # Temporarily reset timestamps to clip-local for matching
-            original_ts = [f["timestamp_sec"] for f in clip_frames]
-            base_ts = clip_frames[0]["timestamp_sec"]
-            for f in clip_frames:
-                f["timestamp_sec"] = f["timestamp_sec"] - base_ts
-            match_frames_to_gps(clip_frames, trackpoints, video_start_time=clip_start)
-            # Restore cumulative timestamps
-            for f, orig_ts in zip(clip_frames, original_ts):
-                f["timestamp_sec"] = orig_ts
+            # Per-clip size check
+            for vf in video_files:
+                fsize = os.path.getsize(os.path.join(video_path, vf))
+                if fsize > MAX_PER_CLIP_SIZE:
+                    size_mb_clip = fsize / (1024 ** 2)
+                    warnings.append(
+                        f"Clip '{vf}' is {size_mb_clip:.0f}MB (>{MAX_PER_CLIP_SIZE // (1024 * 1024)}MB recommended). Consider compressing."
+                    )
     else:
-        # Single clip — use the standard matching
-        frames = match_frames_to_gps(frames, trackpoints, video_start_time=video_start_time)
+        # Single file
+        if not os.path.isfile(video_path):
+            return {"error": True, "message": f"Video path not found: {video_path}"}
+        total_size = os.path.getsize(video_path)
+        size_mb = total_size / (1024 ** 2)
 
-    geo_count = sum(1 for f in frames if f.get("lat") is not None)
-    print(f"  \u2192 {geo_count} frames geo-tagged")
+        if not skip_size_guards:
+            size_gb = total_size / (1024 ** 3)
+            if total_size > MAX_TOTAL_SIZE:
+                return {
+                    "error": True,
+                    "message": f"Total video size is {size_gb:.1f}GB. Maximum recommended is 500MB. Please compress clips first.",
+                }
+            if total_size > MAX_PER_CLIP_SIZE:
+                size_mb_clip = total_size / (1024 ** 2)
+                warnings.append(
+                    f"Clip '{os.path.basename(video_path)}' is {size_mb_clip:.0f}MB (>{MAX_PER_CLIP_SIZE // (1024 * 1024)}MB recommended). Consider compressing."
+                )
 
-    # --- Stage 4: Assess road condition ---
-    print("Stage 4/5: Analysing road condition...")
-    anthropic_client = None
-    if not use_mock:
-        from anthropic import Anthropic
-        anthropic_client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
+    progress(1, f"Validating uploads... (checking {n_clips} clips, {size_mb:.0f}MB total)")
 
-    result = assess_road(
-        frames,
-        anthropic_client=anthropic_client,
-        max_frames=max_frames,
-        use_mock=use_mock,
-    )
-    assessed_frames = result["frames"]
-    summary = result["summary"]
+    # ── MAIN PIPELINE (wrapped for memory safety) ────────────────────
+    try:
+        print("\n[TARA Video Pipeline]")
+        print("\u2500" * 21)
+        if is_dir:
+            mp4_count = len([f for f in os.listdir(video_path) if f.lower().endswith(VIDEO_EXTENSIONS)])
+            print(f"Mode: Multi-clip ({mp4_count} files)")
+        else:
+            print(f"Mode: Single file")
 
-    # --- Stage 5: Generate outputs ---
-    print("Stage 5/5: Generating outputs...")
-    geojson = frames_to_condition_geojson(assessed_frames)
-    print(f"  \u2192 GeoJSON with {len(geojson['features'])} sections")
-    point_geojson = frames_to_geojson(assessed_frames)
-    panel_data = build_condition_summary_panel(summary, total_distance_km=total_dist_km)
+        # --- Stage 2: Extract frames ---
+        if is_dir:
+            mp4_files = sorted(
+                f for f in os.listdir(video_path)
+                if f.lower().endswith(VIDEO_EXTENSIONS)
+            )
+            for i, mp4 in enumerate(mp4_files):
+                progress(2, f"Extracting frames... (clip {i + 1}/{len(mp4_files)} — {mp4})")
+        else:
+            progress(2, f"Extracting frames... (clip 1/1 — {os.path.basename(video_path)})")
 
-    if use_mock:
-        narrative = generate_condition_narrative_mock(summary)
-    else:
-        narrative = generate_condition_narrative(summary, anthropic_client)
-    print("  \u2192 Condition narrative generated")
+        frames = extract_frames(video_path, interval_seconds=frame_interval)
+        if frames:
+            duration_min = frames[-1]["timestamp_sec"] / 60
+        else:
+            duration_min = 0
+        clip_count = len(set(f.get("clip_filename", "") for f in frames))
+        print(f"  \u2192 Extracted {len(frames)} frames from {clip_count} clip(s) "
+              f"(every {frame_interval}s, {duration_min:.1f} min total)")
 
-    # Save outputs
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
-    os.makedirs(output_dir, exist_ok=True)
+        # --- Stage 3: Parse GPS & match ---
+        trackpoints = parse_gpx_folder(gpx_path)
+        total_dist_m = 0.0
+        for i in range(1, len(trackpoints)):
+            total_dist_m += haversine(
+                trackpoints[i - 1]["lat"], trackpoints[i - 1]["lon"],
+                trackpoints[i]["lat"], trackpoints[i]["lon"],
+            )
+        total_dist_km = total_dist_m / 1000
+        tp_duration = 0.0
+        if len(trackpoints) >= 2 and trackpoints[0]["time"] and trackpoints[-1]["time"]:
+            tp_duration = (trackpoints[-1]["time"] - trackpoints[0]["time"]).total_seconds() / 60
+        print(f"  \u2192 {len(trackpoints)} trackpoints over {tp_duration:.1f} minutes, {total_dist_km:.2f} km")
 
-    with open(os.path.join(output_dir, "condition.geojson"), "w") as f:
-        json.dump(geojson, f, indent=2)
-    with open(os.path.join(output_dir, "narrative.md"), "w") as f:
-        f.write(narrative)
-    with open(os.path.join(output_dir, "summary.json"), "w") as f:
-        json.dump(summary, f, indent=2)
+        progress(3, f"Matching GPS coordinates... ({len(frames)} frames \u2192 {len(trackpoints)} trackpoints)")
 
-    elapsed = time.time() - t0
-    print(f"\n\u2713 Pipeline complete in {elapsed:.1f}s")
+        # Auto-detect video_start_time from first clip filename if not provided
+        if video_start_time is None and frames:
+            first_clip = frames[0].get("clip_filename", "")
+            auto_time = extract_start_time_from_filename(first_clip)
+            if auto_time:
+                video_start_time = auto_time
+                print(f"  Auto-detected start time from filename: {video_start_time}")
 
-    # Build metadata
-    if is_dir:
-        video_label = f"{clip_count} clips"
-    else:
-        video_label = os.path.basename(video_path)
+        # For multi-clip, match per-clip using each clip's own start time
+        clips = {}
+        for f in frames:
+            clips.setdefault(f.get("clip_filename", ""), []).append(f)
 
-    gpx_label = os.path.basename(gpx_path)
+        if len(clips) > 1:
+            # Per-clip GPS matching
+            for clip_filename, clip_frames in clips.items():
+                clip_start = clip_frames[0].get("video_start_time")
+                if clip_start is None:
+                    clip_start = video_start_time
+                # Temporarily reset timestamps to clip-local for matching
+                original_ts = [f["timestamp_sec"] for f in clip_frames]
+                base_ts = clip_frames[0]["timestamp_sec"]
+                for f in clip_frames:
+                    f["timestamp_sec"] = f["timestamp_sec"] - base_ts
+                match_frames_to_gps(clip_frames, trackpoints, video_start_time=clip_start)
+                # Restore cumulative timestamps
+                for f, orig_ts in zip(clip_frames, original_ts):
+                    f["timestamp_sec"] = orig_ts
+        else:
+            # Single clip — use the standard matching
+            frames = match_frames_to_gps(frames, trackpoints, video_start_time=video_start_time)
 
-    return {
-        "frames": assessed_frames,
-        "summary": summary,
-        "geojson": geojson,
-        "point_geojson": point_geojson,
-        "narrative": narrative,
-        "panel_data": panel_data,
-        "metadata": {
-            "video_file": video_label,
-            "gpx_file": gpx_label,
-            "total_clips": clip_count,
-            "total_frames_extracted": len(frames),
-            "frames_assessed": summary["total_frames_assessed"],
-            "total_distance_km": round(total_dist_km, 2),
-            "processing_time_sec": round(elapsed, 1),
-        },
-    }
+        geo_count = sum(1 for f in frames if f.get("lat") is not None)
+        print(f"  \u2192 {geo_count} frames geo-tagged")
+
+        # --- Stage 4: Assess road condition ---
+        n_to_assess = min(len(frames), max_frames)
+        progress(4, f"Analysing road condition... (frame 1/{n_to_assess})")
+
+        anthropic_client = None
+        if not use_mock:
+            from anthropic import Anthropic
+            anthropic_client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
+
+        result = assess_road(
+            frames,
+            anthropic_client=anthropic_client,
+            max_frames=max_frames,
+            use_mock=use_mock,
+        )
+        assessed_frames = result["frames"]
+        summary = result["summary"]
+
+        # --- Stage 5: Generate outputs ---
+        n_sections = summary.get("total_frames_assessed", 0)
+        progress(5, f"Building condition map... ({n_sections} sections, {total_dist_km:.1f}km)")
+
+        geojson = frames_to_condition_geojson(
+            assessed_frames,
+            trackpoints=trackpoints,
+            video_start_time=video_start_time,
+            all_frames=frames,
+        )
+        print(f"  \u2192 GeoJSON with {len(geojson['features'])} sections")
+        point_geojson = frames_to_geojson(assessed_frames)
+        panel_data = build_condition_summary_panel(summary, total_distance_km=total_dist_km)
+
+        # --- Stage 6: Generate narrative ---
+        progress(6, "Generating assessment narrative...")
+
+        if use_mock:
+            narrative = generate_condition_narrative_mock(summary)
+        else:
+            narrative = generate_condition_narrative(summary, anthropic_client)
+        print("  \u2192 Condition narrative generated")
+
+        # Save outputs
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        with open(os.path.join(output_dir, "condition.geojson"), "w") as f:
+            json.dump(geojson, f, indent=2)
+        with open(os.path.join(output_dir, "narrative.md"), "w") as f:
+            f.write(narrative)
+        with open(os.path.join(output_dir, "summary.json"), "w") as f:
+            json.dump(summary, f, indent=2)
+
+        elapsed = time.time() - t0
+
+        # Build metadata
+        if is_dir:
+            video_label = f"{clip_count} clips"
+        else:
+            video_label = os.path.basename(video_path)
+
+        gpx_label = os.path.basename(gpx_path)
+
+        n_sections_final = len(geojson["features"])
+        progress(7, f"Complete \u2713 \u2014 {n_sections_final} sections assessed over {total_dist_km:.1f}km")
+
+        result_dict = {
+            "frames": assessed_frames,
+            "summary": summary,
+            "geojson": geojson,
+            "point_geojson": point_geojson,
+            "narrative": narrative,
+            "panel_data": panel_data,
+            "metadata": {
+                "video_file": video_label,
+                "gpx_file": gpx_label,
+                "total_clips": clip_count,
+                "total_frames_extracted": len(frames),
+                "frames_assessed": summary["total_frames_assessed"],
+                "total_distance_km": round(total_dist_km, 2),
+                "processing_time_sec": round(elapsed, 1),
+            },
+        }
+
+        if warnings:
+            result_dict["warnings"] = warnings
+
+        return result_dict
+
+    except (MemoryError, OverflowError) as e:
+        return {
+            "error": True,
+            "message": f"Memory error during processing: {e}. Try compressing clips or reducing clip count.",
+        }
 
 
 if __name__ == "__main__":

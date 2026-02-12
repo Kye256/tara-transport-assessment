@@ -49,66 +49,68 @@ def _extract_from_single_file(
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_sec = total_frames / fps if fps > 0 else 0
-    frame_skip = int(fps * interval_seconds)
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration_sec = total_frames / fps if fps > 0 else 0
+        frame_skip = int(fps * interval_seconds)
 
-    expected = int(duration_sec // interval_seconds) + 1
-    clip_label = f"[Clip {clip_index + 1}/{total_clips}] " if clip_index is not None else ""
+        expected = int(duration_sec // interval_seconds) + 1
+        clip_label = f"[Clip {clip_index + 1}/{total_clips}] " if clip_index is not None else ""
 
-    results = []
-    frame_num = 0
-    extracted = 0
+        results = []
+        frame_num = 0
+        extracted = 0
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        if frame_num % frame_skip == 0:
-            local_ts = frame_num / fps
-            cumulative_ts = cumulative_time + local_ts
+            if frame_num % frame_skip == 0:
+                local_ts = frame_num / fps
+                cumulative_ts = cumulative_time + local_ts
 
-            # Resize preserving aspect ratio
-            h, w = frame.shape[:2]
-            if w > max_width:
-                scale = max_width / w
-                frame = cv2.resize(frame, (max_width, int(h * scale)))
+                # Resize preserving aspect ratio
+                h, w = frame.shape[:2]
+                if w > max_width:
+                    scale = max_width / w
+                    frame = cv2.resize(frame, (max_width, int(h * scale)))
 
-            # Save as JPEG
-            global_idx = frame_offset + extracted
-            filename = f"frame_{global_idx:03d}.jpg"
-            image_path = os.path.join(output_dir, filename)
-            cv2.imwrite(image_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                # Save as JPEG
+                global_idx = frame_offset + extracted
+                filename = f"frame_{global_idx:03d}.jpg"
+                image_path = os.path.join(output_dir, filename)
+                cv2.imwrite(image_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
-            # Base64 encode
-            with open(image_path, "rb") as f:
-                image_base64 = base64.b64encode(f.read()).decode("utf-8")
+                # Base64 encode
+                with open(image_path, "rb") as f:
+                    image_base64 = base64.b64encode(f.read()).decode("utf-8")
 
-            mins, secs = divmod(int(cumulative_ts), 60)
-            print(f"  {clip_label}Extracted frame {extracted + 1}/{expected} at {mins}:{secs:02d} (cumulative)")
+                mins, secs = divmod(int(cumulative_ts), 60)
+                print(f"  {clip_label}Extracted frame {extracted + 1}/{expected} at {mins}:{secs:02d} (cumulative)")
 
-            frame_data = {
-                "frame_index": global_idx,
-                "timestamp_sec": cumulative_ts,
-                "image_path": image_path,
-                "image_base64": image_base64,
-                "clip_filename": os.path.basename(video_path),
-            }
+                frame_data = {
+                    "frame_index": global_idx,
+                    "timestamp_sec": cumulative_ts,
+                    "image_path": image_path,
+                    "image_base64": image_base64,
+                    "clip_filename": os.path.basename(video_path),
+                }
 
-            # Add clip start time from filename if available
-            clip_ts = extract_start_time_from_filename(os.path.basename(video_path))
-            if clip_ts:
-                frame_data["clip_timestamp"] = clip_ts
-                frame_data["video_start_time"] = clip_ts
+                # Add clip start time from filename if available
+                clip_ts = extract_start_time_from_filename(os.path.basename(video_path))
+                if clip_ts:
+                    frame_data["clip_timestamp"] = clip_ts
+                    frame_data["video_start_time"] = clip_ts
 
-            results.append(frame_data)
-            extracted += 1
+                results.append(frame_data)
+                extracted += 1
 
-        frame_num += 1
+            frame_num += 1
+    finally:
+        cap.release()
 
-    cap.release()
     return results, duration_sec
 
 
