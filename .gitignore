@@ -11,6 +11,7 @@ build/
 *.egg
 
 # Data files (raw/large — only processed GeoJSON goes in repo)
+data/videos/
 data/worldpop/*.tif
 data/hotosm_uga_roads.zip
 data/*.shp
