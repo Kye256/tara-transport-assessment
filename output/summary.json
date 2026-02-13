@@ -1,12 +1,13 @@
 {
-  "total_frames_assessed": 209,
+  "total_frames_assessed": 244,
   "condition_distribution": {
-    "poor": 125,
-    "fair": 84
+    "poor": 90,
+    "fair": 121,
+    "good": 33
   },
-  "average_iri": 12.0,
+  "average_iri": 9.0,
   "dominant_surface": "earth",
-  "dominant_condition": "poor",
+  "dominant_condition": "fair",
   "distress_types_found": [
     "corrugation",
     "edge_break",

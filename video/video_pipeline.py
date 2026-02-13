@@ -18,6 +18,7 @@ from video.video_map import (
     generate_condition_narrative_mock,
 )
 from video.intervention import recommend_interventions_for_route
+from video.equity import generate_equity_narrative, generate_equity_narrative_mock
 
 
 # ── Cache helpers ──────────────────────────────────────────────────
@@ -158,6 +159,10 @@ def run_pipeline(
                 progress(1, "Loading cached results...")
                 with open(cache_path, "r") as f:
                     cached_result = json.load(f)
+                # Backfill equity_narrative for caches from before equity integration
+                if "equity_narrative" not in cached_result:
+                    section_features = cached_result.get("geojson", {}).get("features", [])
+                    cached_result["equity_narrative"] = generate_equity_narrative_mock(section_features)
                 sections_count = cached_result.get("metadata", {}).get("sections_count", "?")
                 progress(7, f"Loaded from cache — {sections_count} sections")
                 return cached_result
@@ -363,12 +368,24 @@ def run_pipeline(
         print(f"  \u2192 {len(interventions['sections'])} sections, "
               f"est. cost ${total_intervention_cost:,.0f}")
 
-        # Generate narrative
+        # Generate narratives
         if use_mock:
             narrative = generate_condition_narrative_mock(summary)
         else:
             narrative = generate_condition_narrative(summary, anthropic_client)
         print("  \u2192 Condition narrative generated")
+
+        # Generate equity narrative from section-level camera observations
+        section_features = geojson.get("features", [])
+        try:
+            if use_mock:
+                equity_narrative = generate_equity_narrative_mock(section_features)
+            else:
+                equity_narrative = generate_equity_narrative(section_features, anthropic_client)
+            print("  \u2192 Equity narrative generated")
+        except Exception as e:
+            print(f"  Equity narrative generation failed: {e}")
+            equity_narrative = generate_equity_narrative_mock(section_features)
 
         # Save outputs
         output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
@@ -406,6 +423,7 @@ def run_pipeline(
             "geojson": geojson,
             "point_geojson": point_geojson,
             "narrative": narrative,
+            "equity_narrative": equity_narrative,
             "panel_data": panel_data,
             "interventions": interventions,
             "metadata": {
