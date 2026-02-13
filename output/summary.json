@@ -1,19 +1,19 @@
 {
   "total_frames_assessed": 20,
   "condition_distribution": {
-    "fair": 12,
-    "good": 1,
-    "poor": 7
+    "poor": 10,
+    "fair": 8,
+    "good": 2
   },
-  "average_iri": 8.9,
+  "average_iri": 9.4,
   "dominant_surface": "earth",
-  "dominant_condition": "fair",
+  "dominant_condition": "poor",
   "distress_types_found": [
     "corrugation",
     "cracking",
+    "edge_break",
     "erosion",
     "patching",
-    "pothole",
     "raveling",
     "rutting"
   ]

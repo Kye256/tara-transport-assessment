@@ -1,182 +1,157 @@
 # TARA Video Pipeline — Autonomous Fix & Validate
-# Paste this into Claude Code. It will orchestrate sub-agents to fix, test, and iterate.
+# Paste into Claude Code. Runs autonomously with sub-agents via Task tool.
 
 ---
 
 ## ORCHESTRATOR INSTRUCTIONS
 
-You are the orchestrator agent for fixing TARA's dashcam video pipeline. You will dispatch sub-agents using the Task tool for parallel work, then validate and iterate until all checks pass.
+You are the orchestrator. You will:
+1. Read the codebase
+2. Build a test harness
+3. Run it to see what's broken
+4. Dispatch sub-agents to fix things in parallel
+5. Integrate their work
+6. Run tests again
+7. Iterate until all 12 checks pass
 
-**Read these files first before doing anything:**
-- `CLAUDE.md` (project context)
+**FIRST ACTION — read these files before doing anything else:**
+- `CLAUDE.md`
 - `video/video_frames.py`
 - `video/gps_utils.py`
 - `video/vision_assess.py`
 - `video/video_map.py`
 - `video/video_pipeline.py`
 
-**Do NOT modify any Dash UI files (app.py, layouts/, callbacks/).** Only touch files in `video/`.
+**BOUNDARIES — do NOT touch these:**
+- `app.py`, anything in `layouts/`, `callbacks/`, `assets/`
+- Only modify files in `video/`
 
 ---
 
-## PROBLEM STATEMENT
+## WHAT'S BROKEN
 
-The video pipeline runs but produces bad GeoJSON output:
-1. Sections don't form a continuous line — gaps, jumps, or one straight line
-2. All frames get grouped into one giant section (one color, one popup)
-3. The polyline doesn't follow the road — it draws straight lines between frame GPS points
-4. App crashes with `allocation size overflow` on large/uncompressed video uploads
-5. User sees only a loading spinner with no progress feedback during processing
+1. GeoJSON sections don't form a continuous line — gaps, jumps, or one straight line
+2. All frames grouped into one giant section (one color, one popup for whole route)
+3. Polyline doesn't follow road — straight lines between GPS points instead of following GPX track
+4. App crashes with `allocation size overflow` on large video uploads (browser-side, but server should validate)
+5. No progress feedback during processing — just a spinner
+6. No automatic intervention recommendation based on condition assessment
+7. Sections don't break on surface type change — a gravel section and paved section get lumped together
 
 **Test data:**
 - Compressed clips: `data/videos/demo2_kasangati_loop/clips_compressed/`
-- GPX file: `data/videos/12-Feb-2026-1537.gpx` (895 trackpoints, 14:19–15:37 local)
-- Timezone: UTC+3. GPX = UTC. Clip filenames = local time.
+- GPX: `data/videos/12-Feb-2026-1537.gpx` (895 trackpoints, 14:19–15:37 local time)
+- Timezone: UTC+3. GPX stores UTC. Clip filenames are local time.
 
 ---
 
-## EXECUTION PLAN
+## PHASE 1: BUILD VALIDATOR (you do this, don't delegate)
 
-### Phase 1: Build Validator (do this yourself, don't delegate)
+Create `video/test_pipeline.py`. This runs the pipeline in mock mode (no API calls) and validates the GeoJSON output.
 
-Create `video/test_pipeline.py` that runs the pipeline in mock mode and checks GeoJSON output against 11 criteria. This is your test harness for the entire task.
+```
+python -m video.test_pipeline
+```
 
-**Validation checks — ALL must pass:**
+**12 validation checks — ALL must pass:**
 
-| # | Check | Pass Criteria |
-|---|-------|--------------|
+| # | Check | Criteria |
+|---|-------|----------|
 | 1 | CONTINUITY | Each section starts within 50m of previous section's end |
-| 2 | SECTION LENGTH | No section > 1.5km. Target ~1km, shorter OK on condition change |
+| 2 | SECTION LENGTH | No section > 1.5km |
 | 3 | MINIMUM SECTIONS | At least 6 sections for 8.35km route |
-| 4 | GPS DENSITY | Every section has 2+ coordinate pairs in its LineString |
-| 5 | COORDINATES IN BOUNDS | All coords within lat 0.35-0.42, lon 32.60-32.67 |
-| 6 | NO STRAIGHT LINES | Sections > 500m must have 3+ coordinate pairs |
-| 7 | PROPERTIES | Every feature has: condition_class, color, avg_iri, surface_type, section_index |
-| 8 | TEMPORAL ORDER | Section indices sequential, matching travel direction |
+| 4 | GPS DENSITY | Every LineString has 2+ coordinate pairs |
+| 5 | COORDS IN BOUNDS | All points within lat 0.35–0.42, lon 32.60–32.67 |
+| 6 | NO STRAIGHT LINES | Sections > 500m have 3+ coordinate pairs |
+| 7 | PROPERTIES | Every feature has: condition_class, color, avg_iri, surface_type, section_index, length_km |
+| 8 | TEMPORAL ORDER | Section indices sequential |
 | 9 | POPUP HTML | Every feature has popup_html with `<img>` tag |
 | 10 | TOTAL DISTANCE | Sum of sections within 20% of 8.35km |
-| 11 | SIZE GUARDS | Pipeline rejects total >500MB, per-clip >50MB, count >30; catches MemoryError/OverflowError gracefully |
+| 11 | SIZE GUARDS | Pipeline returns error (not crash) for: total >500MB, clip >50MB, count >30 |
+| 12 | INTERVENTION | Every section in pipeline output has intervention with: code, name, cost_per_km, design_life, reasoning |
 
-Output format:
-```
-[PASS] Continuity: All 9 sections connected (max gap: 12m)
-[FAIL] Section length: Section 3 is 2.4km (max 1.5km)
-...
-7/11 checks passed
-```
-
-Run with: `python -m video.test_pipeline`
-
-### Phase 2: Dispatch Sub-Agents (in parallel via Task tool)
-
-After building the validator and running it once to see which checks fail, dispatch these sub-agents simultaneously:
+**After building the validator, run it immediately.** Read the output. Note which checks fail. You need this information before dispatching sub-agents.
 
 ---
 
-**Sub-Agent A: Fix GPS Matching** — file: `video/gps_utils.py`
+## PHASE 2: DISPATCH SUB-AGENTS (parallel via Task tool)
+
+Dispatch ALL FOUR sub-agents simultaneously. They work on separate files so there are no conflicts.
+
+### Sub-Agent A → `video/gps_utils.py` ONLY
+
 ```
-Task: Fix GPS utilities so frames map to continuous road-following coordinates.
+Fix GPS utilities for continuous road-following coordinates.
 
-Problems to fix:
-1. GPS matching snaps to nearest trackpoint instead of interpolating between two nearest by timestamp → causes jumps
-2. No function to retrieve all intermediate GPX trackpoints between two timestamps
+Read video/gps_utils.py first.
 
-Required changes:
-- Fix match_frames_to_gps() to interpolate lat/lon linearly between the two bracketing trackpoints
-- Add function: get_trackpoints_between(trackpoints, start_time, end_time) → returns all GPX points in that time window, inclusive
-- This function is critical — video_map.py will use it to build dense LineStrings
-- Ensure haversine() distance function exists in this file
+Problems:
+1. GPS matching snaps to nearest trackpoint instead of interpolating → causes coordinate jumps
+2. No function to get intermediate GPX trackpoints between two timestamps
 
-Test: The matched GPS coordinates should form a smooth path when plotted, not a zigzag.
+Changes needed:
+- Fix match_frames_to_gps(): interpolate lat/lon linearly between the two bracketing trackpoints by timestamp
+- Add new function get_trackpoints_between(trackpoints, start_time, end_time):
+  Returns all GPX trackpoints where start_time <= time <= end_time, inclusive.
+  This is critical — video_map.py will call it to build dense LineStrings.
+- Ensure haversine(lat1, lon1, lat2, lon2) exists and returns distance in meters
 
-Do NOT modify any other files. Only touch video/gps_utils.py.
+ONLY touch video/gps_utils.py. Do not modify any other file.
 ```
 
----
+### Sub-Agent B → `video/video_map.py` ONLY
 
-**Sub-Agent B: Fix Section Grouping** — file: `video/video_map.py`
 ```
-Task: Fix GeoJSON section builder so sections follow the actual road and break at proper intervals.
+Fix GeoJSON section builder for proper road sectioning.
 
-Problems to fix:
-1. Sections only break on condition_class change — need to ALSO break when cumulative distance exceeds 1km
-2. LineStrings only contain frame GPS points — need ALL intermediate GPX trackpoints for road-following curves
-3. Need to import and use get_trackpoints_between() from gps_utils
+Read video/video_map.py and video/gps_utils.py first.
 
-Required changes to frames_to_condition_geojson():
-- Accept trackpoints list as parameter (the full GPX track)
-- For each section, build LineString from ALL GPX trackpoints between first and last frame timestamps in that section
-- Break sections when ANY of these occur: (a) condition_class changes, (b) surface_type changes, (c) cumulative distance exceeds 1.0km
-- Surface type change is the most important break — a paved section and a gravel section MUST be separate because they get different interventions
-- Each section's properties must include: condition_class, color, avg_iri, surface_type, section_index, popup_html, length_km
+Problems:
+1. Sections only break on condition_class change
+2. LineStrings only have frame GPS points — missing intermediate trackpoints
+
+Changes to frames_to_condition_geojson():
+- Add trackpoints parameter (the full parsed GPX track, list of dicts with lat/lon/time)
+- Break sections when ANY of: (a) condition_class changes, (b) surface_type changes, (c) cumulative distance > 1.0km
+- Surface type change is the highest priority break
+- For each section, build LineString using ALL GPX trackpoints between that section's first and last frame timestamps. Import and call get_trackpoints_between() from gps_utils for this.
+- Each feature properties must include: condition_class, color, avg_iri, surface_type, section_index, length_km, popup_html
 
 Color mapping: good=#2d5f4a, fair=#9a6b2f, poor=#c4652a, bad=#a83a2f
 
-Do NOT modify any other files. Only touch video/video_map.py.
+THE KEY FIX explained:
+Currently:  LineString([frameA_gps, frameB_gps])  ← straight line
+Should be:  LineString([frameA_gps, trackpt1, trackpt2, ..., frameB_gps])  ← follows road
+
+ONLY touch video/video_map.py. Do not modify any other file.
 ```
 
----
+### Sub-Agent C → `video/video_frames.py` ONLY
 
-**Sub-Agent C: Add Size Guards & Progress** — files: `video/video_pipeline.py` + `video/video_frames.py`
 ```
-Task: Add input validation and progress reporting to the video pipeline.
+Fix memory management in frame extraction.
 
-SIZE GUARDS (in video_pipeline.py, before processing starts):
-- Check total size of all clips. If > 500MB: return error dict with message "Total video size is X.XGB. Maximum recommended is 500MB. Please compress clips first."
-- Check each clip. If any > 50MB: return warning in result about which clips are oversized
-- Check clip count. If > 30: return error with message about too many clips
-- Wrap entire pipeline in try/except catching MemoryError and OverflowError → return error dict, never crash
+Read video/video_frames.py first.
 
-MEMORY MANAGEMENT (in video/video_frames.py):
-- Process ONE clip at a time in extract_frames()
-- Call cap.release() explicitly after extracting frames from each clip
-- Never accumulate raw video data in memory — only keep the extracted JPEG frames
+Changes to extract_frames():
+- Process ONE clip at a time. Open clip, extract frames, call cap.release(), then next clip.
+- Never hold multiple video captures open simultaneously.
+- Only accumulate the small JPEG frame data, not raw video.
 
-PROGRESS CALLBACK (in video/video_pipeline.py):
-- Add optional progress_callback parameter to run_pipeline()
-- progress_callback(stage, message) where stage is 1-7
-- Call it at each stage:
-  1. "Validating uploads... (checking {n} clips, {size}MB total)"
-  2. "Extracting frames... (clip {i}/{n} — {filename})" — call once per clip
-  3. "Matching GPS coordinates... ({n_frames} frames → {n_points} trackpoints)"
-  4. "Analysing road condition... (frame {i}/{n})" — call once per frame
-  5. "Building condition map... ({n_sections} sections, {distance}km)"
-  6. "Generating assessment narrative..."
-  7. "Complete ✓ — {n_sections} sections assessed over {distance}km"
-- If no callback provided, print to stdout instead
-
-Only touch video/video_pipeline.py and video/video_frames.py.
+ONLY touch video/video_frames.py. Do not modify any other file.
 ```
 
----
+### Sub-Agent D → CREATE `video/intervention.py` (new file)
 
-### Phase 3: Integrate & Validate (do this yourself after sub-agents complete)
-
-1. Review all sub-agent changes for conflicts
-2. Ensure video_map.py correctly imports get_trackpoints_between from gps_utils
-3. Ensure video_pipeline.py passes trackpoints to video_map functions
-4. Run: `python -m video.test_pipeline`
-5. Read output carefully. Fix any remaining failures.
-6. **Repeat steps 4-5 until 11/11 pass.** Do not stop at partial passes.
-
-### Phase 4: Test with Real Vision API (only after 11/11 in mock mode)
-
-1. Run pipeline with `use_mock=False` on 5 frames only to verify API integration
-2. Confirm GeoJSON still passes validator
-3. Save final GeoJSON to `output/test_condition.geojson`
-
-### Phase 5: Wire Vision Results → Intervention Selection
-
-After the video pipeline produces a condition assessment, TARA should automatically recommend an intervention and pre-fill cost parameters for the CBA. This bridges Step 2 (condition) to Step 4 (costs).
-
-**Sub-Agent D: Intervention Selector** — new file: `video/intervention.py`
 ```
-Task: Create an intervention recommendation module that takes vision assessment results and returns a recommended intervention with default cost parameters.
+Create intervention recommendation module.
+
+This is a NEW file: video/intervention.py
 
 INTERVENTION TABLE (Uganda-calibrated costs):
 
-| Code | Intervention | Cost/km (USD) | Design Life (yr) | Maintenance/km/yr |
-|------|-------------|---------------|-------------------|-------------------|
+| Code | Name | Cost/km USD | Design Life yr | Maintenance/km/yr USD |
+|------|------|-------------|----------------|----------------------|
 | REG  | Regravelling | 60,000 | 5 | 5,000 |
 | DBST | Upgrade to DBST | 800,000 | 10 | 8,000 |
 | AC   | Upgrade to Asphalt Concrete | 1,000,000 | 15 | 10,000 |
@@ -184,133 +159,171 @@ INTERVENTION TABLE (Uganda-calibrated costs):
 | PM   | Periodic Maintenance (Overlay) | 150,000 | 8 | 8,000 |
 | DUAL | Dualling | 2,000,000 | 20 | 15,000 |
 | DUAL_NMT | Dualling + NMT Facilities | 2,500,000 | 20 | 18,000 |
-| RM   | Routine Maintenance (baseline) | 5,000/yr | ongoing | 5,000 |
+| RM   | Routine Maintenance Only | 5,000 | 1 | 5,000 |
 
-SELECTION LOGIC — based on surface_type, condition_class, and avg_iri from vision results:
+SELECTION LOGIC per section:
 
-def recommend_intervention(summary):
-    surface = summary['dominant_surface']  # from vision assessment
-    condition = summary['overall_condition']  # good/fair/poor/bad
-    avg_iri = summary['avg_iri']
-    
-    if surface in ('earth', 'gravel'):
-        if condition in ('good', 'fair'):
-            return 'DBST'   # upgrade while road is still in OK shape
-        else:
-            return 'DBST'   # upgrade — regravelling is false economy for most cases
-    
-    elif surface in ('paved_asphalt', 'paved_dbst', 'paved'):
-        if condition == 'good':
-            return 'RM'     # routine maintenance, don't fix what isn't broken
-        elif condition == 'fair':
-            return 'PM'     # overlay/reseal before it gets worse
-        elif condition == 'poor':
-            return 'REHAB'  # structural rehabilitation needed
-        else:  # bad
-            return 'REHAB'  # or reconstruct
-    
-    return 'DBST'  # safe default for unknown
+Unpaved (earth/gravel):
+  any condition → DBST (regravelling is false economy for most traffic levels)
+  
+Paved (asphalt/dbst/paved):
+  good → RM
+  fair → PM
+  poor → REHAB
+  bad → REHAB
+  
+Unknown → DBST (safe default)
 
-The function should return a dict:
-{
-    'code': 'DBST',
-    'name': 'Upgrade to DBST',
-    'cost_per_km': 800000,
-    'design_life': 10,
-    'maintenance_per_km_yr': 8000,
-    'reasoning': 'Unpaved earth/gravel road in poor condition. Upgrade to DBST is the standard intervention for this road class in Uganda.',
-    'alternatives': ['AC', 'REG'],  # other options the user might consider
-}
+Create these functions:
 
-CRITICAL: Interventions are PER SECTION, not per route. The pipeline groups the drive into homogeneous sections by surface type and condition. Each section gets its own intervention recommendation.
+1. get_intervention(code) → dict with all fields for that intervention
+2. get_all_interventions() → list of all intervention dicts
+3. recommend_intervention(section) → dict:
+   section has: surface_type, condition_class, avg_iri, length_km
+   Returns: {
+     'code': 'DBST',
+     'name': 'Upgrade to DBST', 
+     'cost_per_km': 800000,
+     'design_life': 10,
+     'maintenance_per_km_yr': 8000,
+     'section_cost': 960000,  # cost_per_km × length_km
+     'reasoning': '...',  # 1-2 sentences explaining why
+     'alternatives': ['AC', 'REG']
+   }
 
-Create two functions:
-1. recommend_intervention(section_summary) → dict for ONE section
-2. recommend_interventions_for_route(sections) → list of dicts, one per section, plus a route_summary:
+4. recommend_interventions_for_route(sections) → dict:
+   {
+     'sections': [
+       {'section_index': 0, 'length_km': 1.2, 'surface': 'paved', 'condition': 'fair', 'intervention': {...}},
+       ...
+     ],
+     'route_summary': {
+       'total_length_km': 8.3,
+       'total_cost': 5_200_000,
+       'dominant_intervention': 'DBST',
+       'narrative': 'The route comprises N distinct sections...'
+     }
+   }
 
-{
-    'sections': [
-        {'section_index': 0, 'length_km': 1.2, 'surface': 'paved_asphalt', 'condition': 'fair', 'intervention': {...}},
-        {'section_index': 1, 'length_km': 0.8, 'surface': 'gravel', 'condition': 'poor', 'intervention': {...}},
-        {'section_index': 2, 'length_km': 2.1, 'surface': 'earth', 'condition': 'bad', 'intervention': {...}},
-    ],
-    'route_summary': {
-        'total_length_km': 4.1,
-        'total_cost': 3_240_000,  # sum of (section length × intervention cost/km)
-        'dominant_intervention': 'DBST',  # most common by length
-        'narrative': 'The 4.1km route comprises three distinct sections...'
-    }
-}
-
-The reasoning string should be generated by the agent — it should explain WHY this intervention was chosen based on what the vision assessment found.
-
-Also create get_intervention(code) that returns the full details for any intervention code, and get_all_interventions() that returns the full table.
-
-Wire this into video_pipeline.py: after vision assessment completes, call recommend_intervention(summary) and include the result in the pipeline output.
-
-Only create video/intervention.py. Update video/video_pipeline.py to call it.
-```
-
-Add check 12 to the validator:
-```
-12. INTERVENTION: Pipeline output includes recommended_intervention with code, name, cost_per_km, design_life, and reasoning fields.
+ONLY create video/intervention.py. Do not modify any other file.
 ```
 
 ---
 
-## THE CRITICAL FIX (read this carefully)
+## PHASE 3: INTEGRATE (you do this yourself)
 
-The root cause of straight lines is that LineStrings only contain frame GPS points:
+After all 4 sub-agents complete:
+
+1. **Wire intervention into pipeline.** Edit `video/video_pipeline.py`:
+   - Import recommend_interventions_for_route from video.intervention
+   - After vision assessment and section building, call it with the sections
+   - Include intervention results in pipeline output
+   - Add progress_callback support:
+     - Accept optional `progress_callback(stage, message)` parameter
+     - Call at stages 1-7 (see stage list below)
+     - If no callback, print to stdout
+
+2. **Wire trackpoints into video_map.** Edit `video/video_pipeline.py`:
+   - Pass the parsed trackpoints list to frames_to_condition_geojson()
+
+3. **Add size guards to pipeline.** Edit `video/video_pipeline.py`:
+   - Before processing: check total size >500MB, per-clip >50MB, count >30
+   - Return error dict on failure, never crash
+   - Wrap pipeline in try/except for MemoryError/OverflowError
+
+4. **Verify imports work:**
+   ```
+   python -c "from video.intervention import recommend_intervention; print('OK')"
+   python -c "from video.gps_utils import get_trackpoints_between; print('OK')"
+   ```
+
+**Progress stages for callback:**
 ```
-Frame 1 at GPS A → Frame 2 at GPS B → Frame 3 at GPS C
-Current:  LineString([A, B, C])  ← straight lines between frames
+1. "Validating uploads... ({n} clips, {size}MB)"
+2. "Extracting frames... (clip {i}/{n})"  ← per clip
+3. "Matching GPS... ({n_frames} frames → {n_points} trackpoints)"
+4. "Analysing condition... (frame {i}/{n})"  ← per frame  
+5. "Building sections... ({n} sections, {dist}km)"
+6. "Recommending interventions..."
+7. "Complete ✓ — {n} sections, {dist}km, est. cost ${total}"
 ```
 
-The fix is to include ALL GPX trackpoints between frames:
+---
+
+## PHASE 4: VALIDATE & ITERATE (the loop)
+
 ```
-GPX track between A→B has points: A, t1, t2, t3, t4, B
-GPX track between B→C has points: B, t5, t6, t7, C
-Fixed:    LineString([A, t1, t2, t3, t4, B, t5, t6, t7, C])  ← follows road
+python -m video.test_pipeline
 ```
 
-This requires:
-1. `gps_utils.py` provides `get_trackpoints_between(trackpoints, start_time, end_time)`
-2. `video_map.py` calls this for each section to get dense coordinates
-3. The full `trackpoints` list must be passed through the pipeline to `video_map.py`
+Read output. If any check fails:
+1. Identify which file has the bug
+2. Fix it yourself (don't re-dispatch sub-agents for small fixes)
+3. Run validator again
+4. Repeat until: **12/12 checks passed ✓**
+
+**Do not proceed to Phase 5 until 12/12 pass.**
+
+---
+
+## PHASE 5: REAL API TEST (only after 12/12 in mock)
+
+1. Run pipeline with `use_mock=False`, `max_frames=5`
+2. Confirm GeoJSON still passes validator
+3. Confirm intervention recommendations are present per section
+4. Save output to `output/test_condition.geojson`
+
+---
+
+## THE CRITICAL FIX (reference for all agents)
+
+Why sections are straight lines:
+```
+Current:  Frame1→Frame2→Frame3 = LineString([GPS_A, GPS_B, GPS_C])
+          Three points, straight lines between them.
+
+Fixed:    Between Frame1 and Frame2, GPX has trackpoints t1,t2,t3,t4
+          LineString([GPS_A, t1, t2, t3, t4, GPS_B, t5, t6, GPS_C])
+          Dense points following the actual road path.
+```
+
+Requires: gps_utils.get_trackpoints_between() → video_map uses it per section.
 
 ---
 
 ## MOCK MODE SPEC
 
-The mock vision assessor (used during testing) should:
-- Cycle conditions: good, good, fair, fair, poor, good, good, fair, poor, bad (repeat)
-- IRI values: good=3-5, fair=6-9, poor=10-14, bad=15+
-- Surface types cycling: paved_asphalt, paved_asphalt, gravel, earth (repeat)
-- Placeholder image: "MOCK_IMAGE_DATA"
+Mock vision assessor cycles through realistic variation:
+- Conditions: good, good, fair, fair, poor, good, good, fair, poor, bad (repeat)
+- Surface types: paved_asphalt, paved_asphalt, gravel, earth (repeat)  
+- IRI: good=3-5, fair=6-9, poor=10-14, bad=15+
+- Image: "MOCK_IMAGE_DATA" placeholder
+
+This ensures sections break on both condition AND surface type changes.
 
 ---
 
 ## STOP CONDITION
 
-When `python -m video.test_pipeline` outputs:
-```
-12/12 checks passed ✓
-```
+When validator outputs `12/12 checks passed ✓`:
 
-Then update CLAUDE.md with:
-- [x] Video pipeline validator: 12/12 passing
-- List any API or function signature changes made
-- Note the test command
+1. Update CLAUDE.md:
+   - [x] Video pipeline: 12/12 validator checks passing
+   - [x] Intervention recommendation per section
+   - Note any function signature changes
+   
+2. Commit: `git add video/ && git commit -m "Video pipeline: 12/12 validator passing, per-section interventions"`
 
-You are done. Do not continue making changes after all checks pass.
+3. **Stop. Do not make further changes.**
 
 ---
 
 ## RULES
 
-- Do NOT touch Dash UI files (app.py, layouts/, callbacks/, assets/)
-- Do NOT make real API calls until Phase 4
-- Do NOT add dependencies — use only what's already installed + stdlib
-- Run the validator after EVERY change, not just at the end
-- If a sub-agent's output breaks another module, fix the integration yourself — don't re-dispatch
-- Keep functions short. No god-objects.
+- Do NOT touch app.py, layouts/, callbacks/, assets/
+- Do NOT make real API calls until Phase 5
+- Do NOT add new dependencies
+- Run validator after EVERY code change
+- Fix integration issues yourself — don't re-dispatch for small bugs
+- Sub-agents touch ONLY their assigned files
+- Keep functions short, no god-objects
