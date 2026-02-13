@@ -988,6 +988,7 @@ def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
             "overall_condition": _iri_to_score(avg_iri),
             "defects": distress_list,
             "drainage_condition": "unknown",
+            "sections": result.get("interventions", {}).get("sections", []),
         }
 
         # --- Build map layer ---
@@ -1110,20 +1111,30 @@ def show_video_cost_breakdown(video_data, current_step):
     if not sections:
         return html.Div()
 
+    # Get per-section IRI from GeoJSON features (1:1 with intervention sections)
+    geojson_features = video_data.get("geojson", {}).get("features", [])
+
     header = html.Thead(html.Tr([
         html.Th("Section"), html.Th("Length"), html.Th("Surface"),
-        html.Th("Condition"), html.Th("Intervention"), html.Th("Cost", style={"textAlign": "right"}),
+        html.Th("Condition"), html.Th("IRI"), html.Th("Intervention"),
+        html.Th("Cost", style={"textAlign": "right"}),
     ]))
     rows = []
     for i, sec in enumerate(sections, 1):
         length_km = sec.get("length_km", 0)
+        intervention = sec.get("intervention", {})
+        # Get per-section IRI from matching GeoJSON feature
+        feat_props = geojson_features[i - 1]["properties"] if i - 1 < len(geojson_features) else {}
+        iri = feat_props.get("avg_iri", 0)
         rows.append(html.Tr([
             html.Td(f"{i}"),
             html.Td(f"{length_km:.1f} km", style={"fontFamily": "DM Mono"}),
-            html.Td(sec.get("surface_type", "?").replace("_", " ").title()),
-            html.Td(sec.get("condition_class", "?").title()),
-            html.Td(sec.get("intervention_name", "?")),
-            html.Td(f"${sec.get('cost', 0):,.0f}", style={"textAlign": "right", "fontFamily": "DM Mono"}),
+            html.Td(sec.get("surface", "?").replace("_", " ").title()),
+            html.Td(sec.get("condition", "?").title()),
+            html.Td(f"{iri:.1f}", style={"fontFamily": "DM Mono"}),
+            html.Td(intervention.get("name", "?")),
+            html.Td(f"${intervention.get('section_cost', 0):,.0f}",
+                     style={"textAlign": "right", "fontFamily": "DM Mono"}),
         ]))
 
     total_cost = route_summary.get("total_cost", 0)
@@ -1132,7 +1143,7 @@ def show_video_cost_breakdown(video_data, current_step):
     footer = html.Tr([
         html.Td("Total", style={"fontWeight": "bold"}),
         html.Td(f"{total_km:.1f} km", style={"fontWeight": "bold", "fontFamily": "DM Mono"}),
-        html.Td(""), html.Td(""), html.Td(""),
+        html.Td(""), html.Td(""), html.Td(""), html.Td(""),
         html.Td(f"${total_cost:,.0f}", style={"fontWeight": "bold", "textAlign": "right", "fontFamily": "DM Mono"}),
     ])
 
@@ -1144,6 +1155,8 @@ def show_video_cost_breakdown(video_data, current_step):
                    className="tara-table"),
         html.Small(f"Average: ${cost_per_km:,.0f}/km", className="text-muted",
                    style={"fontFamily": "DM Mono"}),
+        html.Small("Costs based on Uganda-calibrated intervention rates (UNRA 2024)",
+                   className="text-muted d-block", style={"fontSize": "0.75rem"}),
     ], className="mt-2")
 
 
@@ -1228,6 +1241,7 @@ def validate_costs(total_cost, discount_rate_pct, analysis_period, road_data):
     State("discount-rate-input", "value"),
     State("analysis-period-input", "value"),
     State("base-year-input", "value"),
+    State("video-condition-store", "data"),
     prevent_initial_call=True,
 )
 def run_cba_callback(
@@ -1235,12 +1249,14 @@ def run_cba_callback(
     adt, growth_rate_pct, traffic_pct_values,
     total_cost, construction_years,
     discount_rate_pct, analysis_period, base_year,
+    video_data,
 ):
     from engine.cba import run_cba
     from engine.equity import calculate_equity_score
     from output.charts import (
         create_waterfall_chart, create_cashflow_chart, create_traffic_growth_chart,
     )
+    from config.parameters import VOC_RATES
 
     if not adt or not total_cost:
         return (
@@ -1252,8 +1268,33 @@ def run_cba_callback(
     if road_data and road_data.get("total_length_km"):
         road_length = road_data["total_length_km"]
 
+    # Override road length from video pipeline if available
+    if video_data and "interventions" in video_data:
+        video_length = video_data["interventions"].get("route_summary", {}).get("total_length_km")
+        if video_length and video_length > 0:
+            road_length = video_length
+
     growth_rate = (growth_rate_pct or 3.5) / 100.0
     discount_rate = (discount_rate_pct or 12.0) / 100.0
+
+    # IRI-based VOC scaling: adjust "without project" rates based on measured IRI
+    # Default VOC_RATES["without_project"] assumes worst case (IRI ~14).
+    # If video shows better condition, scale down VOC savings for honest CBA.
+    voc_without_override = None
+    video_iri = None
+    if condition_data and condition_data.get("source") == "video_pipeline":
+        video_iri = condition_data.get("iri")
+    if video_iri is not None:
+        # Linear interpolation: f = clamp((iri - 4) / 10, 0, 1)
+        # f=1 (IRI>=14): full without_project rates (road is very rough)
+        # f=0 (IRI<=4): use with_project rates (road already good, no VOC benefit)
+        f = max(0.0, min(1.0, (video_iri - 4) / 10))
+        voc_with = VOC_RATES["with_project"]
+        voc_wo = VOC_RATES["without_project"]
+        voc_without_override = {
+            vc: voc_with[vc] + f * (voc_wo[vc] - voc_with[vc])
+            for vc in voc_wo
+        }
 
     # Build vehicle split from per-class percentage inputs
     vehicle_split = None
@@ -1277,6 +1318,8 @@ def run_cba_callback(
         "base_year": int(base_year or 2025),
         "vehicle_split": vehicle_split,
     }
+    if voc_without_override:
+        cba_inputs["voc_without"] = voc_without_override
 
     try:
         cba_results = run_cba(**cba_inputs)
