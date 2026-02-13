@@ -1,8 +1,11 @@
 """TARA dashcam video analysis pipeline — orchestrator."""
 
+import copy
+import hashlib
 import json
 import os
 import time
+from datetime import datetime
 
 from video.video_frames import extract_frames, extract_start_time_from_filename
 from video.gps_utils import parse_gpx_folder, match_frames_to_gps, haversine
@@ -17,16 +20,96 @@ from video.video_map import (
 from video.intervention import recommend_interventions_for_route
 
 
+# ── Cache helpers ──────────────────────────────────────────────────
+
+
+def _get_cache_dir(video_path: str) -> str:
+    """Get cache directory for a video dataset."""
+    if os.path.isdir(video_path):
+        basename = os.path.basename(video_path)
+        if basename in ("clips", "clips_compressed"):
+            parent = os.path.dirname(video_path)
+        else:
+            parent = video_path
+    else:
+        parent = os.path.dirname(video_path)
+    return os.path.join(parent, "cache")
+
+
+def _get_cache_path(video_path: str, gpx_path: str, frame_interval_meters: int) -> str:
+    """Cache key includes paths and frame interval."""
+    cache_dir = _get_cache_dir(video_path)
+    key = f"{video_path}:{gpx_path}:{frame_interval_meters}"
+    h = hashlib.md5(key.encode()).hexdigest()[:12]
+    return os.path.join(cache_dir, f"pipeline_{h}.json")
+
+
+def _strip_base64_for_cache(result: dict) -> dict:
+    """Remove large base64 image data from result before caching."""
+    cached = copy.deepcopy(result)
+    if "frames" in cached:
+        for frame in cached["frames"]:
+            if "image_base64" in frame:
+                frame["image_base64"] = "[cached]"
+    return cached
+
+
+# ── Distance-based frame selection ─────────────────────────────────
+
+
+def _select_frames_by_distance(
+    matched_frames: list[dict],
+    interval_meters: int = 25,
+) -> list[dict]:
+    """Select frames spaced by GPS distance, not time.
+
+    Args:
+        matched_frames: Frames with lat/lon from GPS matching.
+        interval_meters: Minimum distance between selected frames.
+
+    Returns:
+        Subset of frames spaced at least *interval_meters* apart.
+    """
+    # Filter to only geo-tagged frames
+    geo_frames = [f for f in matched_frames if f.get("lat") is not None]
+    if not geo_frames:
+        return matched_frames  # fallback to all frames
+
+    selected = [geo_frames[0]]
+    cumulative = 0.0
+
+    for i in range(1, len(geo_frames)):
+        prev = geo_frames[i - 1]
+        curr = geo_frames[i]
+        dist = haversine(prev["lat"], prev["lon"], curr["lat"], curr["lon"])
+        cumulative += dist
+
+        if cumulative >= interval_meters:
+            selected.append(curr)
+            cumulative = 0.0
+
+    # Always include last frame
+    if selected[-1] is not geo_frames[-1]:
+        selected.append(geo_frames[-1])
+
+    return selected
+
+
+# ── Main pipeline ──────────────────────────────────────────────────
+
+
 def run_pipeline(
     video_path: str,
     gpx_path: str,
     video_start_time: str = None,
     frame_interval: int = 5,
     max_frames: int = 20,
+    frame_interval_meters: int = None,
     use_mock: bool = False,
     api_key: str = None,
     progress_callback=None,
     skip_size_guards: bool = False,
+    use_cache: bool = True,
 ) -> dict:
     """Run the full dashcam analysis pipeline.
 
@@ -35,13 +118,18 @@ def run_pipeline(
         gpx_path: path to GPX file OR directory of GPX files.
         video_start_time: "2026-02-12 14:18:00" (local time, optional).
             Auto-detected from first clip filename if not provided.
-        frame_interval: seconds between frame samples
-        max_frames: cap on frames to send to Vision API
+        frame_interval: seconds between frame samples (legacy, used when
+            *frame_interval_meters* is not provided).
+        max_frames: cap on frames to send to Vision API (legacy, used when
+            *frame_interval_meters* is not provided).
+        frame_interval_meters: if provided, select frames by GPS distance
+            instead of time.  Overrides *frame_interval* and *max_frames*.
         use_mock: if True, skip real API calls
         api_key: Anthropic API key (reads from env if not provided)
         progress_callback: optional callable(stage: int, message: str)
             for reporting progress to the UI.
         skip_size_guards: if True, skip size/count validation (for testing).
+        use_cache: if True, check for and save cached results.
 
     Returns dict with frames, summary, geojson, narrative, metadata.
     """
@@ -58,6 +146,23 @@ def run_pipeline(
     MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
     MAX_PER_CLIP_SIZE = 100 * 1024 * 1024  # 100 MB
     MAX_CLIP_COUNT = 100
+
+    use_distance_mode = frame_interval_meters is not None
+    effective_interval_meters = frame_interval_meters or 25
+
+    # ── CACHE CHECK ──────────────────────────────────────────────────
+    if use_cache and not use_mock:
+        try:
+            cache_path = _get_cache_path(video_path, gpx_path, effective_interval_meters)
+            if os.path.exists(cache_path):
+                progress(1, "Loading cached results...")
+                with open(cache_path, "r") as f:
+                    cached_result = json.load(f)
+                sections_count = cached_result.get("metadata", {}).get("sections_count", "?")
+                progress(7, f"Loaded from cache — {sections_count} sections")
+                return cached_result
+        except Exception as e:
+            print(f"  Cache read failed, running pipeline: {e}")
 
     # ── SIZE GUARDS ──────────────────────────────────────────────────
     warnings = []
@@ -205,7 +310,18 @@ def run_pipeline(
         print(f"  \u2192 {geo_count} frames geo-tagged")
 
         # --- Stage 4: Assess road condition ---
-        n_to_assess = min(len(frames), max_frames)
+        # Distance-based frame selection (new) vs legacy time-based
+        if use_distance_mode:
+            frames_for_vision = _select_frames_by_distance(
+                frames, interval_meters=frame_interval_meters,
+            )
+            n_to_assess = len(frames_for_vision)
+            print(f"  \u2192 Distance-based selection: {n_to_assess} frames "
+                  f"at {frame_interval_meters}m spacing")
+        else:
+            frames_for_vision = frames
+            n_to_assess = min(len(frames), max_frames)
+
         progress(4, f"Analysing road condition... (frame 1/{n_to_assess})")
 
         anthropic_client = None
@@ -213,10 +329,11 @@ def run_pipeline(
             from anthropic import Anthropic
             anthropic_client = Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
 
+        vision_max = None if use_distance_mode else max_frames
         result = assess_road(
-            frames,
+            frames_for_vision,
             anthropic_client=anthropic_client,
-            max_frames=max_frames,
+            max_frames=vision_max,
             use_mock=use_mock,
         )
         assessed_frames = result["frames"]
@@ -224,7 +341,7 @@ def run_pipeline(
 
         # --- Stage 5: Generate outputs ---
         n_sections = summary.get("total_frames_assessed", 0)
-        progress(5, f"Building condition map... ({n_sections} sections, {total_dist_km:.1f}km)")
+        progress(5, f"Building condition map... ({n_sections} assessed, {total_dist_km:.1f}km)")
 
         geojson = frames_to_condition_geojson(
             assessed_frames,
@@ -266,15 +383,21 @@ def run_pipeline(
 
         elapsed = time.time() - t0
 
-        # Build metadata
+        # Build metadata (enhanced — Change 7)
         if is_dir:
+            dataset_name = os.path.basename(
+                os.path.dirname(video_path)
+                if os.path.basename(video_path) in ("clips", "clips_compressed")
+                else video_path
+            )
             video_label = f"{clip_count} clips"
         else:
+            dataset_name = os.path.basename(os.path.dirname(video_path))
             video_label = os.path.basename(video_path)
 
         gpx_label = os.path.basename(gpx_path)
-
         n_sections_final = len(geojson["features"])
+
         progress(7, f"Complete \u2713 \u2014 {n_sections_final} sections, {total_dist_km:.1f}km, est. cost ${total_intervention_cost:,.0f}")
 
         result_dict = {
@@ -286,18 +409,37 @@ def run_pipeline(
             "panel_data": panel_data,
             "interventions": interventions,
             "metadata": {
+                "dataset_name": dataset_name,
                 "video_file": video_label,
                 "gpx_file": gpx_label,
                 "total_clips": clip_count,
                 "total_frames_extracted": len(frames),
-                "frames_assessed": summary["total_frames_assessed"],
+                "frames_sent_to_vision": summary["total_frames_assessed"],
+                "frame_interval_meters": effective_interval_meters if use_distance_mode else None,
                 "total_distance_km": round(total_dist_km, 2),
-                "processing_time_sec": round(elapsed, 1),
+                "sections_count": n_sections_final,
+                "processing_time_seconds": round(elapsed, 1),
+                "model_used": "claude-opus-4-6",
+                "gpx_trackpoints": len(trackpoints),
+                "timestamp": datetime.now().isoformat(),
             },
         }
 
         if warnings:
             result_dict["warnings"] = warnings
+
+        # ── SAVE CACHE ──────────────────────────────────────────────
+        if use_cache and not use_mock:
+            try:
+                cache_dir = _get_cache_dir(video_path)
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_path = _get_cache_path(video_path, gpx_path, effective_interval_meters)
+                cache_result = _strip_base64_for_cache(result_dict)
+                with open(cache_path, "w") as f:
+                    json.dump(cache_result, f)
+                print(f"  \u2192 Cache saved to {cache_path}")
+            except Exception as e:
+                print(f"  Warning: Could not save cache: {e}")
 
         return result_dict
 

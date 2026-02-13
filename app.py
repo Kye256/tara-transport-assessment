@@ -34,6 +34,11 @@ from config.parameters import (
     MAINTENANCE_COSTS,
     SENSITIVITY_VARIABLES,
 )
+from video.datasets import scan_datasets
+
+# Pre-scan video datasets at startup
+_DATASETS = scan_datasets()
+_DATASETS_BY_VALUE = {d["value"]: d for d in _DATASETS}
 
 # ============================================================
 # App Setup
@@ -207,13 +212,24 @@ def build_step2():
             dbc.Col([
                 dcc.Dropdown(
                     id="video-preset-dropdown",
-                    options=[
-                        {"label": "Kasangati loop (42 clips, compressed)", "value": "demo2"},
-                    ],
+                    options=[{"label": d["label"], "value": d["value"]} for d in _DATASETS],
                     placeholder="Select a preset dataset...",
                     className="mb-2",
                 ),
-            ], md=8),
+            ], md=5),
+            dbc.Col([
+                dcc.Dropdown(
+                    id="frame-interval-dropdown",
+                    options=[
+                        {"label": "Rapid (50m)", "value": 50},
+                        {"label": "Standard (25m)", "value": 25},
+                        {"label": "Detailed (10m)", "value": 10},
+                    ],
+                    value=25,
+                    clearable=False,
+                    style={"fontSize": "13px"},
+                ),
+            ], md=3),
             dbc.Col([
                 dbc.Button("Run Video Analysis", id="run-video-btn",
                            className="tara-btn-amber", size="sm", disabled=True),
@@ -331,6 +347,7 @@ def build_step4():
             ], md=6),
         ], className="mb-3"),
         html.Div(id="cost-warnings"),
+        html.Div(id="video-cost-breakdown"),
     ]), className="mb-3")
 
 
@@ -788,11 +805,9 @@ def handle_dashcam_upload(contents, filename, road_data):
 )
 def populate_preset_paths(preset):
     """Populate path inputs from preset dataset selection."""
-    if preset == "demo2":
-        return (
-            "data/videos/demo2_kasangati_loop/clips_compressed",
-            "data/videos/12-Feb-2026-1537.gpx",
-        )
+    ds = _DATASETS_BY_VALUE.get(preset)
+    if ds:
+        return ds["clips_dir"], ds["gpx_path"]
     return "", ""
 
 
@@ -846,12 +861,13 @@ def update_video_upload_status(video_path, gpx_path):
     Input("run-video-btn", "n_clicks"),
     State("video-path-input", "value"),
     State("gpx-path-input", "value"),
+    State("frame-interval-dropdown", "value"),
     State("road-data-store", "data"),
     State("main-map", "children"),
     prevent_initial_call=True,
 )
 def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
-                       road_data, current_map_children):
+                       frame_interval_meters, road_data, current_map_children):
     """Run the full video + GPS analysis pipeline using local file paths."""
     if not n_clicks:
         return no_update, no_update, no_update, no_update, no_update
@@ -889,8 +905,7 @@ def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
         result = run_pipeline(
             video_path=video_path,
             gpx_path=gpx_path,
-            frame_interval=5,
-            max_frames=20,
+            frame_interval_meters=frame_interval_meters or 25,
             use_mock=False,
         )
 
@@ -1024,7 +1039,10 @@ def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
         return (
             result_ui,
             condition_data,
-            _make_serializable({"summary": summary, "geojson": geojson, "panel_data": panel_data}),
+            _make_serializable({
+                "summary": summary, "geojson": geojson, "panel_data": panel_data,
+                "interventions": result.get("interventions", {}),
+            }),
             map_children,
             bounds,
         )
@@ -1053,6 +1071,80 @@ def update_cost_per_km(total_cost, road_data):
         return html.Span(f"${total_cost / length:,.0f}/km", className="tara-metric-value positive",
                          style={"fontSize": "0.9rem"})
     return html.Span("\u2014")
+
+
+# --- Step 4: Auto-populate cost from video pipeline ---
+
+@callback(
+    Output("total-cost-input", "value"),
+    Input("video-condition-store", "data"),
+    prevent_initial_call=True,
+)
+def auto_populate_costs(video_data):
+    """Auto-fill construction cost from video pipeline interventions."""
+    if not video_data or "interventions" not in video_data:
+        raise dash.exceptions.PreventUpdate
+    interventions = video_data["interventions"]
+    route_summary = interventions.get("route_summary", {})
+    total_cost = route_summary.get("total_cost")
+    if total_cost and total_cost > 0:
+        return round(total_cost)
+    raise dash.exceptions.PreventUpdate
+
+
+# --- Step 4: Video cost breakdown table ---
+
+@callback(
+    Output("video-cost-breakdown", "children"),
+    Input("video-condition-store", "data"),
+    Input("current-step-store", "data"),
+    prevent_initial_call=True,
+)
+def show_video_cost_breakdown(video_data, current_step):
+    """Show per-section cost breakdown from video pipeline in Step 4."""
+    if current_step != 4 or not video_data or "interventions" not in video_data:
+        return html.Div()
+    interventions = video_data["interventions"]
+    sections = interventions.get("sections", [])
+    route_summary = interventions.get("route_summary", {})
+    if not sections:
+        return html.Div()
+
+    header = html.Thead(html.Tr([
+        html.Th("Section"), html.Th("Length"), html.Th("Surface"),
+        html.Th("Condition"), html.Th("Intervention"), html.Th("Cost", style={"textAlign": "right"}),
+    ]))
+    rows = []
+    for i, sec in enumerate(sections, 1):
+        length_km = sec.get("length_km", 0)
+        rows.append(html.Tr([
+            html.Td(f"{i}"),
+            html.Td(f"{length_km:.1f} km", style={"fontFamily": "DM Mono"}),
+            html.Td(sec.get("surface_type", "?").replace("_", " ").title()),
+            html.Td(sec.get("condition_class", "?").title()),
+            html.Td(sec.get("intervention_name", "?")),
+            html.Td(f"${sec.get('cost', 0):,.0f}", style={"textAlign": "right", "fontFamily": "DM Mono"}),
+        ]))
+
+    total_cost = route_summary.get("total_cost", 0)
+    total_km = route_summary.get("total_length_km", 0)
+    cost_per_km = total_cost / total_km if total_km > 0 else 0
+    footer = html.Tr([
+        html.Td("Total", style={"fontWeight": "bold"}),
+        html.Td(f"{total_km:.1f} km", style={"fontWeight": "bold", "fontFamily": "DM Mono"}),
+        html.Td(""), html.Td(""), html.Td(""),
+        html.Td(f"${total_cost:,.0f}", style={"fontWeight": "bold", "textAlign": "right", "fontFamily": "DM Mono"}),
+    ])
+
+    return html.Div([
+        html.Hr(),
+        html.H6("Video Pipeline Cost Estimate", className="tara-heading",
+                 style={"fontSize": "0.85rem"}),
+        html.Table([header, html.Tbody(rows), html.Tfoot([footer])],
+                   className="tara-table"),
+        html.Small(f"Average: ${cost_per_km:,.0f}/km", className="text-muted",
+                   style={"fontFamily": "DM Mono"}),
+    ], className="mt-2")
 
 
 # --- Input Validation Warnings ---

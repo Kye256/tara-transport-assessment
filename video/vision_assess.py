@@ -27,7 +27,7 @@ DEFAULT_ASSESSMENT = {
 }
 
 
-def assess_frame(image_base64: str, anthropic_client, model: str = "claude-sonnet-4-5-20250929") -> dict:
+def assess_frame(image_base64: str, anthropic_client, model: str = "claude-opus-4-6") -> dict:
     """Send one frame to Claude Vision, get condition assessment."""
     for attempt in range(2):
         try:
@@ -117,7 +117,7 @@ def assess_road(
     max_frames: int = None,
     delay: float = 1.0,
     use_mock: bool = False,
-    model: str = "claude-sonnet-4-5-20250929",
+    model: str = "claude-opus-4-6",
 ) -> dict:
     """Assess all (or sampled) frames. Returns results dict with frames and summary."""
     frames = list(frames_with_gps)

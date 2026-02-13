@@ -14,7 +14,7 @@ from agent.tools import TOOL_DEFINITIONS, execute_tool
 
 
 MAX_ITERATIONS = 10
-MODEL = "claude-sonnet-4-5-20250929"
+MODEL = "claude-opus-4-6"
 
 TOOL_LABELS = {
     "search_road": "Searching for road on OpenStreetMap",
