@@ -27,7 +27,7 @@ DEFAULT_ASSESSMENT = {
 }
 
 
-def assess_frame(image_base64: str, anthropic_client, model: str = "claude-sonnet-4-5-20250929") -> dict:
+def assess_frame(image_base64: str, anthropic_client, model: str = "claude-opus-4-6") -> dict:
     """Send one frame to Claude Vision, get condition assessment."""
     for attempt in range(2):
         try:
@@ -65,34 +65,49 @@ def assess_frame(image_base64: str, anthropic_client, model: str = "claude-sonne
             return dict(DEFAULT_ASSESSMENT)
 
 
+_MOCK_COUNTER = 0
+
+# Deterministic cycling sequences for reproducible testing
+_MOCK_CONDITIONS = ["good", "good", "fair", "fair", "poor", "good", "good", "fair", "poor", "bad"]
+_MOCK_IRI_RANGES = {"good": (3, 5), "fair": (6, 9), "poor": (10, 14), "bad": (15, 20)}
+_MOCK_SURFACES = ["paved_asphalt", "paved_asphalt", "gravel", "earth"]
+_MOCK_NOTES = [
+    "Tarmac in fair condition with edge erosion",
+    "Paved surface with patching and minor cracks",
+    "Gravel road with corrugation visible",
+    "Laterite surface with moderate potholing",
+    "Road under active construction with earthworks",
+    "Earth road with deep ruts after rain",
+]
+
+
 def assess_frame_mock(image_base64: str) -> dict:
-    """Return random plausible assessment for testing without API."""
-    surface = random.choice(["gravel", "earth", "paved", "under_construction"])
-    condition = random.choice(["good", "fair", "poor", "bad"])
-    iri_ranges = {"good": (3, 7), "fair": (6, 10), "poor": (9, 14), "bad": (14, 20)}
-    lo, hi = iri_ranges[condition]
-    iri = round(random.uniform(lo, hi), 1)
+    """Return deterministic cycling assessment for testing without API."""
+    global _MOCK_COUNTER
+    idx = _MOCK_COUNTER
+    _MOCK_COUNTER += 1
+
+    condition = _MOCK_CONDITIONS[idx % len(_MOCK_CONDITIONS)]
+    surface = _MOCK_SURFACES[idx % len(_MOCK_SURFACES)]
+    lo, hi = _MOCK_IRI_RANGES[condition]
+    # Deterministic IRI within range
+    iri = round(lo + (hi - lo) * ((idx % 7) / 6), 1)
+
     distress_pool = ["pothole", "cracking", "rutting", "edge_break", "patching", "raveling", "corrugation", "erosion"]
-    n_distress = random.randint(0, 3)
-    distress = random.sample(distress_pool, n_distress) if n_distress > 0 else ["none"]
-    severity = random.choice(["none", "low", "moderate", "high", "severe"])
-    env = random.choice(["urban", "peri_urban", "rural"])
-    notes_pool = [
-        "Laterite surface with moderate potholing",
-        "Tarmac in fair condition with edge erosion",
-        "Gravel road with corrugation visible",
-        "Road under active construction with earthworks",
-        "Paved surface with patching and minor cracks",
-        "Earth road with deep ruts after rain",
-    ]
+    n_distress = idx % 3
+    distress = distress_pool[idx % len(distress_pool): idx % len(distress_pool) + n_distress] or ["none"]
+
+    severity_cycle = ["none", "low", "moderate", "high", "severe"]
+    env_cycle = ["urban", "peri_urban", "rural"]
+
     return {
         "surface_type": surface,
         "condition_class": condition,
         "iri_estimate": iri,
         "distress_types": distress,
-        "distress_severity": severity,
-        "roadside_environment": env,
-        "notes": random.choice(notes_pool),
+        "distress_severity": severity_cycle[idx % len(severity_cycle)],
+        "roadside_environment": env_cycle[idx % len(env_cycle)],
+        "notes": _MOCK_NOTES[idx % len(_MOCK_NOTES)],
     }
 
 
@@ -102,7 +117,7 @@ def assess_road(
     max_frames: int = None,
     delay: float = 1.0,
     use_mock: bool = False,
-    model: str = "claude-sonnet-4-5-20250929",
+    model: str = "claude-opus-4-6",
 ) -> dict:
     """Assess all (or sampled) frames. Returns results dict with frames and summary."""
     frames = list(frames_with_gps)

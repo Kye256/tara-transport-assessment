@@ -23,20 +23,36 @@ Delegate these as **separate sub-agent tasks**. Each agent works on its own file
 
 ### Sub-Agent 1: Frame Extraction (`video_frames.py`)
 
-**Scope:** Extract frames from an MP4 video at a configurable interval.
+**Scope:** Extract frames from a folder of dashcam video clips at a configurable interval.
+
+**Context:** The Yesido dashcam saves 1-minute clips (~95MB each) with filenames like `2026_02_12_HHMMSS_00.MP4`. A typical drive produces 15-20 clips. We process them as one continuous video.
 
 **Build this:**
 ```python
-def extract_frames(video_path: str, interval_seconds: int = 5, output_dir: str = None, max_width: int = 1280) -> list[dict]:
+def extract_frames(video_dir: str, interval_seconds: int = 5, output_dir: str = None, max_width: int = 1280) -> list[dict]:
     """
-    Extract frames from video at interval.
+    Extract frames from all MP4 clips in a directory at interval.
+    
+    Clips are processed in filename order (filenames contain timestamps,
+    e.g., 2026_02_12_144138_00.MP4, so alphabetical = chronological).
+    
+    Treats all clips as one continuous video — frame timestamps are 
+    cumulative across clips.
+    
+    Args:
+        video_dir: path to folder containing MP4 clips
+        interval_seconds: seconds between frame samples
+        output_dir: where to save extracted frames (default: /tmp/tara_frames/)
+        max_width: resize frames to this width (preserves aspect ratio)
     
     Returns: [
         {
             "frame_index": 0,
             "timestamp_sec": 0.0,
+            "clip_filename": "2026_02_12_144138_00.MP4",
+            "clip_timestamp": "14:41:38",
             "image_path": "/tmp/tara_frames/frame_000.jpg",
-            "image_base64": "...",  # base64 encoded, ready for API
+            "image_base64": "...",
         },
         ...
     ]
@@ -45,14 +61,16 @@ def extract_frames(video_path: str, interval_seconds: int = 5, output_dir: str =
 
 **Requirements:**
 - Use OpenCV (`cv2`)
-- Resize frames to `max_width` (preserve aspect ratio) before saving — this saves API tokens
+- Find all `.MP4` and `.mp4` files in `video_dir`, sort alphabetically (= chronological)
+- Process clips sequentially — cumulative timestamp tracks position across all clips
+- Extract clip start time from filename pattern: `2026_02_12_HHMMSS_00.MP4` → parse HHMMSS
+- Resize frames to `max_width` (preserve aspect ratio) before saving
 - Save as JPEG quality 85
 - Store base64 version in the dict (used later for Vision API)
 - Default output_dir: `/tmp/tara_frames/` (create if not exists, clear old frames first)
-- Print progress: `"Extracted frame 1/24 at 0:05"`
-- Handle errors (corrupt video, missing file) gracefully
-
-**Test:** Run on any MP4 file. Verify frames are extracted, sized correctly, base64 is valid.
+- Print progress: `"[Clip 3/18] Extracted frame 5 at 2:35 (cumulative)"`
+- Handle errors (corrupt clip, missing dir) gracefully — skip bad clips, continue
+- Also support single file: if `video_dir` points to a file instead of a directory, process just that file
 
 **Dependencies:** `opencv-python` (install with `pip install opencv-python --break-system-packages`)
 
@@ -60,13 +78,28 @@ def extract_frames(video_path: str, interval_seconds: int = 5, output_dir: str =
 
 ### Sub-Agent 2: GPX Parser & GPS Matching (`gps_utils.py`)
 
-**Scope:** Parse GPX files and match video frames to GPS coordinates.
+**Scope:** Parse a folder of GPX files and match video frames to GPS coordinates.
+
+**Context:** Open GPX Tracker may produce multiple GPX files for one drive (user stops/starts recording). We combine all trackpoints in chronological order.
 
 **Build this:**
 ```python
+def parse_gpx_folder(gpx_dir: str) -> list[dict]:
+    """
+    Parse all GPX files in a directory, combine trackpoints in chronological order.
+    
+    If gpx_dir is a file path instead of directory, parse just that file.
+    
+    Returns: [
+        {"lat": 0.367, "lon": 32.625, "elevation": 1215.0, "time": datetime_obj},
+        ...
+    ]
+    Sorted by time.
+    """
+
 def parse_gpx(gpx_path: str) -> list[dict]:
     """
-    Parse GPX file, extract trackpoints.
+    Parse a single GPX file, extract trackpoints.
     
     Returns: [
         {"lat": 0.367, "lon": 32.625, "elevation": 1215.0, "time": datetime_obj},
@@ -290,7 +323,7 @@ def build_condition_summary_panel(summary: dict) -> dict:
 
 **Build this:**
 ```python
-def run_pipeline(video_path: str, gpx_path: str, 
+def run_pipeline(video_dir: str, gpx_dir: str, 
                   video_start_time: str = None,
                   frame_interval: int = 5,
                   max_frames: int = 20,
@@ -300,9 +333,10 @@ def run_pipeline(video_path: str, gpx_path: str,
     Run the full dashcam analysis pipeline.
     
     Args:
-        video_path: path to MP4 file
-        gpx_path: path to GPX file
-        video_start_time: "2026-02-12 14:18:00" (local time, optional)
+        video_dir: path to folder of MP4 clips (or single MP4 file)
+        gpx_dir: path to folder of GPX files (or single GPX file)
+        video_start_time: "2026-02-12 14:18:00" (local time, optional — 
+                         auto-detected from first clip filename if not provided)
         frame_interval: seconds between frame samples
         max_frames: cap on frames to send to Vision API
         use_mock: if True, skip real API calls (for testing)
@@ -360,9 +394,8 @@ def run_pipeline(video_path: str, gpx_path: str,
 if __name__ == "__main__":
     # Run with mock mode for testing
     result = run_pipeline(
-        video_path="path/to/test/video.mp4",
-        gpx_path="path/to/test/gpx.gpx",
-        video_start_time="2026-02-12 14:18:00",
+        video_dir="data/dashcam/",      # folder of MP4 clips
+        gpx_dir="data/gpx/",            # folder of GPX files
         use_mock=True
     )
     print(f"\nResults: {result['summary']}")
@@ -374,15 +407,24 @@ if __name__ == "__main__":
 
 ```
 video/
-├── video_frames.py      # Sub-Agent 1: frame extraction
-├── gps_utils.py         # Sub-Agent 2: GPX parsing & matching  
+├── video_frames.py      # Sub-Agent 1: frame extraction from clip folder
+├── gps_utils.py         # Sub-Agent 2: GPX folder parsing & matching  
 ├── vision_assess.py     # Sub-Agent 3: Claude Vision calls
 ├── video_map.py         # Sub-Agent 4: GeoJSON & narrative output
 ├── video_pipeline.py    # Sub-Agent 5: orchestrator / entry point
 └── __init__.py          # exports run_pipeline
+
+data/
+├── dashcam/             # User puts MP4 clips here (gitignored)
+│   ├── 2026_02_12_144138_00.MP4
+│   ├── 2026_02_12_144238_00.MP4
+│   └── ...
+└── gpx/                 # User puts GPX files here (gitignored)
+    ├── 12-Feb-2026-1418.gpx
+    └── 12-Feb-2026-1537.gpx
 ```
 
-All video-related code lives in the `video/` directory. Clean separation from the rest of TARA.
+All video-related code lives in the `video/` directory. Data folders are gitignored (large video files). Add `data/dashcam/` and `data/gpx/` to `.gitignore`.
 
 ---
 
@@ -431,10 +473,13 @@ That's the foundation. Everything else (section segmentation, annotated frames, 
 ## REMINDERS
 
 - Uganda timezone is UTC+3. GPX stores UTC. Dashcam timestamps are local time.
-- Our GPX files: `12-Feb-2026-1418.gpx` and `12-Feb-2026-1537.gpx`
+- Our GPX files: `12-Feb-2026-1418.gpx` and `12-Feb-2026-1537.gpx` (in `data/gpx/`)
+- Dashcam clips are 1-minute each, ~95MB, filename pattern: `2026_02_12_HHMMSS_00.MP4` (in `data/dashcam/`)
 - The Yesido dashcam watermarks timestamp in bottom-left of frames: `2026-02-12 14:48:45`
+- Video start time can be auto-detected from first clip filename (parse HHMMSS)
 - Use `xml.etree.ElementTree` for GPX parsing (stdlib, no extra dependency)
 - Frames should be resized to max 1280px wide before base64 encoding (saves tokens)
 - Claude Vision API: same endpoint as regular messages, just include image content block
 - Model string: `claude-opus-4-6-20250204`
+- Add `data/dashcam/` and `data/gpx/` to `.gitignore`
 - Keep functions short. Keep files short. No god-objects. No over-engineering.

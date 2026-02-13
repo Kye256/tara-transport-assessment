@@ -1,6 +1,7 @@
 """GPX parsing and GPS-to-frame matching utilities."""
 
 import math
+import os
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
@@ -45,6 +46,76 @@ def parse_gpx(gpx_path: str) -> list[dict]:
         })
 
     return trackpoints
+
+
+def parse_gpx_folder(gpx_path: str) -> list[dict]:
+    """Parse all GPX files in a directory, combine trackpoints chronologically.
+
+    Args:
+        gpx_path: path to a single .gpx file or a directory containing .gpx files.
+
+    Returns: combined list of trackpoints sorted by time.
+    """
+    if os.path.isfile(gpx_path):
+        return parse_gpx(gpx_path)
+
+    if not os.path.isdir(gpx_path):
+        raise FileNotFoundError(f"GPX path not found: {gpx_path}")
+
+    gpx_files = sorted(
+        f for f in os.listdir(gpx_path)
+        if f.lower().endswith(".gpx")
+    )
+
+    if not gpx_files:
+        raise FileNotFoundError(f"No GPX files found in: {gpx_path}")
+
+    print(f"  Found {len(gpx_files)} GPX files in {gpx_path}")
+
+    all_trackpoints = []
+    for gpx_file in gpx_files:
+        full_path = os.path.join(gpx_path, gpx_file)
+        tps = parse_gpx(full_path)
+        all_trackpoints.extend(tps)
+        print(f"    {gpx_file}: {len(tps)} trackpoints")
+
+    # Sort by time (None times go to end)
+    all_trackpoints.sort(key=lambda tp: tp["time"].timestamp() if tp["time"] else float("inf"))
+    return all_trackpoints
+
+
+def get_trackpoints_between(
+    trackpoints: list[dict],
+    start_epoch: float,
+    end_epoch: float,
+) -> list[list[float]]:
+    """Get all GPX trackpoints between two timestamps as [lon, lat] coordinates.
+
+    Returns all trackpoints whose time falls between start_epoch and end_epoch
+    (inclusive), as [lon, lat] pairs suitable for GeoJSON coordinates.
+
+    This is critical for building dense LineStrings that follow the actual road
+    rather than drawing straight lines between frame GPS points.
+
+    Args:
+        trackpoints: list of trackpoint dicts from parse_gpx / parse_gpx_folder,
+            each containing 'lat', 'lon', and 'time' (datetime) keys.
+        start_epoch: start of the time window (seconds since Unix epoch, inclusive).
+        end_epoch: end of the time window (seconds since Unix epoch, inclusive).
+
+    Returns:
+        List of [lon, lat] pairs (GeoJSON coordinate order) for every trackpoint
+        whose timestamp falls within the window.  Empty list if none match.
+    """
+    coords: list[list[float]] = []
+    for tp in trackpoints:
+        t = tp.get("time")
+        if t is None:
+            continue
+        ts = t.timestamp()
+        if start_epoch <= ts <= end_epoch:
+            coords.append([tp["lon"], tp["lat"]])
+    return coords
 
 
 def match_frames_to_gps(

@@ -34,6 +34,11 @@ from config.parameters import (
     MAINTENANCE_COSTS,
     SENSITIVITY_VARIABLES,
 )
+from video.datasets import scan_datasets
+
+# Pre-scan video datasets at startup
+_DATASETS = scan_datasets()
+_DATASETS_BY_VALUE = {d["value"]: d for d in _DATASETS}
 
 # ============================================================
 # App Setup
@@ -54,6 +59,7 @@ app = dash.Dash(
     title="TARA — Transport Assessment & Road Appraisal",
 )
 server = app.server
+server.config["MAX_CONTENT_LENGTH"] = 3 * 1024 * 1024 * 1024  # 3 GB
 
 STEP_LABELS = [
     "Select Road",
@@ -204,24 +210,52 @@ def build_step2():
         html.P("Or run full video + GPS analysis:", className="text-muted fw-bold"),
         dbc.Row([
             dbc.Col([
-                dcc.Upload(
-                    id="dashcam-video-upload",
-                    children=dbc.Button("Upload MP4 Video", color="outline-primary", size="sm"),
-                    accept=".mp4,.MP4,.avi,.mov",
+                dcc.Dropdown(
+                    id="video-preset-dropdown",
+                    options=[{"label": d["label"], "value": d["value"]} for d in _DATASETS],
+                    placeholder="Select a preset dataset...",
+                    className="mb-2",
                 ),
-            ], md=4),
+            ], md=5),
             dbc.Col([
-                dcc.Upload(
-                    id="gpx-upload",
-                    children=dbc.Button("Upload GPX Track", color="outline-primary", size="sm"),
-                    accept=".gpx",
+                dcc.Dropdown(
+                    id="frame-interval-dropdown",
+                    options=[
+                        {"label": "Rapid (50m)", "value": 50},
+                        {"label": "Standard (25m)", "value": 25},
+                        {"label": "Detailed (10m)", "value": 10},
+                    ],
+                    value=25,
+                    clearable=False,
+                    style={"fontSize": "13px"},
                 ),
-            ], md=4),
+            ], md=3),
             dbc.Col([
                 dbc.Button("Run Video Analysis", id="run-video-btn",
                            className="tara-btn-amber", size="sm", disabled=True),
             ], md=4),
         ], className="mb-2"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Input(
+                    id="video-path-input",
+                    placeholder="Video folder or file path",
+                    size="sm",
+                    type="text",
+                ),
+            ], md=6),
+            dbc.Col([
+                dbc.Input(
+                    id="gpx-path-input",
+                    placeholder="GPX file or folder path",
+                    size="sm",
+                    type="text",
+                ),
+            ], md=6),
+        ], className="mb-2"),
+        # Hidden upload components (preserve IDs for other callbacks)
+        dcc.Upload(id="dashcam-video-upload", style={"display": "none"}),
+        dcc.Upload(id="gpx-upload", style={"display": "none"}),
         html.Div(id="video-upload-status", className="mb-2"),
         dcc.Loading(type="default", children=html.Div(id="video-pipeline-result")),
     ]), className="mb-3")
@@ -313,6 +347,7 @@ def build_step4():
             ], md=6),
         ], className="mb-3"),
         html.Div(id="cost-warnings"),
+        html.Div(id="video-cost-breakdown"),
     ]), className="mb-3")
 
 
@@ -760,23 +795,58 @@ def handle_dashcam_upload(contents, filename, road_data):
             pass
 
 
+# --- Step 2: Preset dropdown → path inputs ---
+
+@callback(
+    Output("video-path-input", "value"),
+    Output("gpx-path-input", "value"),
+    Input("video-preset-dropdown", "value"),
+    prevent_initial_call=True,
+)
+def populate_preset_paths(preset):
+    """Populate path inputs from preset dataset selection."""
+    ds = _DATASETS_BY_VALUE.get(preset)
+    if ds:
+        return ds["clips_dir"], ds["gpx_path"]
+    return "", ""
+
+
 # --- Step 2: Video Pipeline Upload Status ---
 
 @callback(
     Output("video-upload-status", "children"),
     Output("run-video-btn", "disabled"),
-    Input("dashcam-video-upload", "filename"),
-    Input("gpx-upload", "filename"),
+    Input("video-path-input", "value"),
+    Input("gpx-path-input", "value"),
     prevent_initial_call=True,
 )
-def update_video_upload_status(video_filename, gpx_filename):
-    """Show which files are uploaded and enable the run button when both present."""
+def update_video_upload_status(video_path, gpx_path):
+    """Show which paths are set and enable the run button when both present."""
     parts = []
-    if video_filename:
-        parts.append(html.Small(f"Video: {video_filename}", className="text-success me-3"))
-    if gpx_filename:
-        parts.append(html.Small(f"GPX: {gpx_filename}", className="text-success"))
-    both_ready = bool(video_filename and gpx_filename)
+    has_video = False
+    has_gpx = False
+
+    if video_path and video_path.strip():
+        vp = video_path.strip()
+        if os.path.exists(vp):
+            if os.path.isdir(vp):
+                mp4s = [f for f in os.listdir(vp) if f.lower().endswith((".mp4", ".avi", ".mov"))]
+                parts.append(html.Small(f"Video path: {len(mp4s)} clips in {os.path.basename(vp)}/", className="text-success me-3"))
+            else:
+                parts.append(html.Small(f"Video path: {os.path.basename(vp)}", className="text-success me-3"))
+            has_video = True
+        else:
+            parts.append(html.Small("Video path not found", className="text-danger me-3"))
+
+    if gpx_path and gpx_path.strip():
+        gp = gpx_path.strip()
+        if os.path.exists(gp):
+            parts.append(html.Small(f"GPX path: {os.path.basename(gp)}", className="text-success"))
+            has_gpx = True
+        else:
+            parts.append(html.Small("GPX path not found", className="text-danger"))
+
+    both_ready = has_video and has_gpx
     return html.Div(parts), not both_ready
 
 
@@ -789,75 +859,100 @@ def update_video_upload_status(video_filename, gpx_filename):
     Output("main-map", "children", allow_duplicate=True),
     Output("map-bounds-store", "data", allow_duplicate=True),
     Input("run-video-btn", "n_clicks"),
-    State("dashcam-video-upload", "contents"),
-    State("dashcam-video-upload", "filename"),
-    State("gpx-upload", "contents"),
-    State("gpx-upload", "filename"),
+    State("video-path-input", "value"),
+    State("gpx-path-input", "value"),
+    State("frame-interval-dropdown", "value"),
     State("road-data-store", "data"),
     State("main-map", "children"),
     prevent_initial_call=True,
 )
-def run_video_pipeline(n_clicks, video_contents, video_filename,
-                       gpx_contents, gpx_filename, road_data, current_map_children):
-    """Run the full video + GPS analysis pipeline."""
-    if not n_clicks or not video_contents or not gpx_contents:
+def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
+                       frame_interval_meters, road_data, current_map_children):
+    """Run the full video + GPS analysis pipeline using local file paths."""
+    if not n_clicks:
         return no_update, no_update, no_update, no_update, no_update
 
-    # Decode and save video to temp file
-    _, video_b64 = video_contents.split(",", 1)
-    video_ext = video_filename.split(".")[-1].lower() if video_filename else "mp4"
-    video_decoded = base64.b64decode(video_b64)
+    video_path = None
+    gpx_path = None
 
-    # Decode and save GPX to temp file
-    _, gpx_b64 = gpx_contents.split(",", 1)
-    gpx_decoded = base64.b64decode(gpx_b64)
+    if video_path_input and video_path_input.strip():
+        vp = video_path_input.strip()
+        if not os.path.exists(vp):
+            return (
+                dbc.Alert(f"Video path not found: {vp}", color="danger"),
+                no_update, no_update, no_update, no_update,
+            )
+        video_path = vp
 
-    video_tmp = None
-    gpx_tmp = None
+    if gpx_path_input and gpx_path_input.strip():
+        gp = gpx_path_input.strip()
+        if not os.path.exists(gp):
+            return (
+                dbc.Alert(f"GPX path not found: {gp}", color="danger"),
+                no_update, no_update, no_update, no_update,
+            )
+        gpx_path = gp
+
+    if not video_path or not gpx_path:
+        return (
+            dbc.Alert("Please provide both video and GPX paths.", color="warning"),
+            no_update, no_update, no_update, no_update,
+        )
+
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{video_ext}") as f:
-            f.write(video_decoded)
-            video_tmp = f.name
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".gpx") as f:
-            f.write(gpx_decoded)
-            gpx_tmp = f.name
-
-        # Extract video start time from filename (e.g. 2026_02_12_144138_00.MP4)
-        video_start_time = None
-        if video_filename:
-            try:
-                from video.run_all import extract_start_time
-                video_start_time = extract_start_time(video_filename)
-            except Exception:
-                pass
 
         from video.video_pipeline import run_pipeline
         result = run_pipeline(
-            video_path=video_tmp,
-            gpx_path=gpx_tmp,
-            video_start_time=video_start_time,
-            frame_interval=5,
-            max_frames=20,
+            video_path=video_path,
+            gpx_path=gpx_path,
+            frame_interval_meters=frame_interval_meters or 25,
             use_mock=False,
         )
+
+        # Handle pipeline error responses (size guards, memory errors, etc.)
+        if result.get("error"):
+            error_msg = result.get("message", "Unknown pipeline error")
+            warnings = result.get("warnings", [])
+            alert_children = [html.Strong("Pipeline Error: "), error_msg]
+            if warnings:
+                alert_children.append(html.Br())
+                alert_children.append(html.Small("; ".join(warnings)))
+            return (
+                dbc.Alert(alert_children, color="danger"),
+                no_update, no_update, no_update, no_update,
+            )
 
         summary = result["summary"]
         geojson = result["geojson"]
         narrative = result.get("narrative", "")
         metadata = result.get("metadata", {})
+        panel_data = result.get("panel_data", {})
 
         # --- Build result UI ---
-        condition_dist = summary.get("condition_distribution", {})
-        dist_badges = []
-        badge_colors = {"good": "success", "fair": "warning", "poor": "danger", "bad": "danger"}
-        for cond, count in condition_dist.items():
-            dist_badges.append(
-                dbc.Badge(f"{cond}: {count}", color=badge_colors.get(cond, "secondary"),
-                          className="me-1")
-            )
-
         distress_list = summary.get("distress_types_found", [])
         distress_str = ", ".join(d.replace("_", " ").title() for d in distress_list) if distress_list else "None"
+
+        # Condition bar — horizontal stacked bar from panel_data percentages
+        cond_pcts = panel_data.get("condition_percentages", {})
+        bar_colors = {"good": "#2d5f4a", "fair": "#9a6b2f", "poor": "#c4652a", "bad": "#a83a2f"}
+        bar_segments = []
+        for cond in ["good", "fair", "poor", "bad"]:
+            pct = cond_pcts.get(cond, 0)
+            if pct > 0:
+                bar_segments.append(html.Div(
+                    f"{pct}%",
+                    style={
+                        "width": f"{pct}%", "background": bar_colors[cond],
+                        "color": "white", "textAlign": "center",
+                        "fontSize": "0.7rem", "fontWeight": "600",
+                        "padding": "2px 0", "display": "inline-block",
+                    },
+                ))
+        condition_bar = html.Div(
+            bar_segments,
+            style={"display": "flex", "borderRadius": "3px", "overflow": "hidden",
+                   "height": "22px", "marginBottom": "8px"},
+        ) if bar_segments else html.Div()
 
         result_ui = html.Div([
             dbc.Alert([
@@ -875,7 +970,7 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
                              "success" if summary.get("dominant_condition") == "good" else "warning"),
                 _metric_card("Frames", str(summary.get("total_frames_assessed", 0)), "primary"),
             ], className="tara-metric-row"),
-            html.Div(dist_badges, className="mb-2"),
+            condition_bar,
             html.Small(f"Distress: {distress_str}", className="text-muted d-block mb-2"),
             dbc.Card(dbc.CardBody([
                 html.H6("Condition Narrative"),
@@ -893,6 +988,7 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
             "overall_condition": _iri_to_score(avg_iri),
             "defects": distress_list,
             "drainage_condition": "unknown",
+            "sections": result.get("interventions", {}).get("sections", []),
         }
 
         # --- Build map layer ---
@@ -921,21 +1017,33 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
         })
         map_children.append(legend_html)
 
-        # Calculate bounds from condition points
+        # Calculate bounds from condition sections (LineString or Point)
         bounds = None
         features = geojson.get("features", [])
         if features:
-            lats = [f["geometry"]["coordinates"][1] for f in features]
-            lons = [f["geometry"]["coordinates"][0] for f in features]
-            bounds = [
-                [min(lats) - 0.005, min(lons) - 0.005],
-                [max(lats) + 0.005, max(lons) + 0.005],
-            ]
+            all_lats, all_lons = [], []
+            for feat in features:
+                geom = feat["geometry"]
+                if geom["type"] == "LineString":
+                    for coord in geom["coordinates"]:
+                        all_lons.append(coord[0])
+                        all_lats.append(coord[1])
+                elif geom["type"] == "Point":
+                    all_lons.append(geom["coordinates"][0])
+                    all_lats.append(geom["coordinates"][1])
+            if all_lats:
+                bounds = [
+                    [min(all_lats) - 0.005, min(all_lons) - 0.005],
+                    [max(all_lats) + 0.005, max(all_lons) + 0.005],
+                ]
 
         return (
             result_ui,
             condition_data,
-            _make_serializable({"summary": summary, "geojson": geojson}),
+            _make_serializable({
+                "summary": summary, "geojson": geojson, "panel_data": panel_data,
+                "interventions": result.get("interventions", {}),
+            }),
             map_children,
             bounds,
         )
@@ -947,13 +1055,6 @@ def run_video_pipeline(n_clicks, video_contents, video_filename,
             dbc.Alert(f"Video pipeline error: {str(e)}", color="danger"),
             no_update, no_update, no_update, no_update,
         )
-    finally:
-        for tmp in [video_tmp, gpx_tmp]:
-            if tmp:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
 
 
 # --- Step 4: Cost per km ---
@@ -971,6 +1072,92 @@ def update_cost_per_km(total_cost, road_data):
         return html.Span(f"${total_cost / length:,.0f}/km", className="tara-metric-value positive",
                          style={"fontSize": "0.9rem"})
     return html.Span("\u2014")
+
+
+# --- Step 4: Auto-populate cost from video pipeline ---
+
+@callback(
+    Output("total-cost-input", "value"),
+    Input("video-condition-store", "data"),
+    prevent_initial_call=True,
+)
+def auto_populate_costs(video_data):
+    """Auto-fill construction cost from video pipeline interventions."""
+    if not video_data or "interventions" not in video_data:
+        raise dash.exceptions.PreventUpdate
+    interventions = video_data["interventions"]
+    route_summary = interventions.get("route_summary", {})
+    total_cost = route_summary.get("total_cost")
+    if total_cost and total_cost > 0:
+        return round(total_cost)
+    raise dash.exceptions.PreventUpdate
+
+
+# --- Step 4: Video cost breakdown table ---
+
+@callback(
+    Output("video-cost-breakdown", "children"),
+    Input("video-condition-store", "data"),
+    Input("current-step-store", "data"),
+    prevent_initial_call=True,
+)
+def show_video_cost_breakdown(video_data, current_step):
+    """Show per-section cost breakdown from video pipeline in Step 4."""
+    if current_step != 4 or not video_data or "interventions" not in video_data:
+        return html.Div()
+    interventions = video_data["interventions"]
+    sections = interventions.get("sections", [])
+    route_summary = interventions.get("route_summary", {})
+    if not sections:
+        return html.Div()
+
+    # Get per-section IRI from GeoJSON features (1:1 with intervention sections)
+    geojson_features = video_data.get("geojson", {}).get("features", [])
+
+    header = html.Thead(html.Tr([
+        html.Th("Section"), html.Th("Length"), html.Th("Surface"),
+        html.Th("Condition"), html.Th("IRI"), html.Th("Intervention"),
+        html.Th("Cost", style={"textAlign": "right"}),
+    ]))
+    rows = []
+    for i, sec in enumerate(sections, 1):
+        length_km = sec.get("length_km", 0)
+        intervention = sec.get("intervention", {})
+        # Get per-section IRI from matching GeoJSON feature
+        feat_props = geojson_features[i - 1]["properties"] if i - 1 < len(geojson_features) else {}
+        iri = feat_props.get("avg_iri", 0)
+        rows.append(html.Tr([
+            html.Td(f"{i}"),
+            html.Td(f"{length_km:.1f} km", style={"fontFamily": "DM Mono"}),
+            html.Td(sec.get("surface", "?").replace("_", " ").title()),
+            html.Td(sec.get("condition", "?").title()),
+            html.Td(f"{iri:.1f}", style={"fontFamily": "DM Mono"}),
+            html.Td(intervention.get("name", "?")),
+            html.Td(f"${intervention.get('section_cost', 0):,.0f}",
+                     style={"textAlign": "right", "fontFamily": "DM Mono"}),
+        ]))
+
+    total_cost = route_summary.get("total_cost", 0)
+    total_km = route_summary.get("total_length_km", 0)
+    cost_per_km = total_cost / total_km if total_km > 0 else 0
+    footer = html.Tr([
+        html.Td("Total", style={"fontWeight": "bold"}),
+        html.Td(f"{total_km:.1f} km", style={"fontWeight": "bold", "fontFamily": "DM Mono"}),
+        html.Td(""), html.Td(""), html.Td(""), html.Td(""),
+        html.Td(f"${total_cost:,.0f}", style={"fontWeight": "bold", "textAlign": "right", "fontFamily": "DM Mono"}),
+    ])
+
+    return html.Div([
+        html.Hr(),
+        html.H6("Video Pipeline Cost Estimate", className="tara-heading",
+                 style={"fontSize": "0.85rem"}),
+        html.Table([header, html.Tbody(rows), html.Tfoot([footer])],
+                   className="tara-table"),
+        html.Small(f"Average: ${cost_per_km:,.0f}/km", className="text-muted",
+                   style={"fontFamily": "DM Mono"}),
+        html.Small("Costs based on Uganda-calibrated intervention rates (UNRA 2024)",
+                   className="text-muted d-block", style={"fontSize": "0.75rem"}),
+    ], className="mt-2")
 
 
 # --- Input Validation Warnings ---
@@ -1054,6 +1241,7 @@ def validate_costs(total_cost, discount_rate_pct, analysis_period, road_data):
     State("discount-rate-input", "value"),
     State("analysis-period-input", "value"),
     State("base-year-input", "value"),
+    State("video-condition-store", "data"),
     prevent_initial_call=True,
 )
 def run_cba_callback(
@@ -1061,12 +1249,14 @@ def run_cba_callback(
     adt, growth_rate_pct, traffic_pct_values,
     total_cost, construction_years,
     discount_rate_pct, analysis_period, base_year,
+    video_data,
 ):
     from engine.cba import run_cba
     from engine.equity import calculate_equity_score
     from output.charts import (
         create_waterfall_chart, create_cashflow_chart, create_traffic_growth_chart,
     )
+    from config.parameters import VOC_RATES
 
     if not adt or not total_cost:
         return (
@@ -1078,8 +1268,33 @@ def run_cba_callback(
     if road_data and road_data.get("total_length_km"):
         road_length = road_data["total_length_km"]
 
+    # Override road length from video pipeline if available
+    if video_data and "interventions" in video_data:
+        video_length = video_data["interventions"].get("route_summary", {}).get("total_length_km")
+        if video_length and video_length > 0:
+            road_length = video_length
+
     growth_rate = (growth_rate_pct or 3.5) / 100.0
     discount_rate = (discount_rate_pct or 12.0) / 100.0
+
+    # IRI-based VOC scaling: adjust "without project" rates based on measured IRI
+    # Default VOC_RATES["without_project"] assumes worst case (IRI ~14).
+    # If video shows better condition, scale down VOC savings for honest CBA.
+    voc_without_override = None
+    video_iri = None
+    if condition_data and condition_data.get("source") == "video_pipeline":
+        video_iri = condition_data.get("iri")
+    if video_iri is not None:
+        # Linear interpolation: f = clamp((iri - 4) / 10, 0, 1)
+        # f=1 (IRI>=14): full without_project rates (road is very rough)
+        # f=0 (IRI<=4): use with_project rates (road already good, no VOC benefit)
+        f = max(0.0, min(1.0, (video_iri - 4) / 10))
+        voc_with = VOC_RATES["with_project"]
+        voc_wo = VOC_RATES["without_project"]
+        voc_without_override = {
+            vc: voc_with[vc] + f * (voc_wo[vc] - voc_with[vc])
+            for vc in voc_wo
+        }
 
     # Build vehicle split from per-class percentage inputs
     vehicle_split = None
@@ -1103,6 +1318,8 @@ def run_cba_callback(
         "base_year": int(base_year or 2025),
         "vehicle_split": vehicle_split,
     }
+    if voc_without_override:
+        cba_inputs["voc_without"] = voc_without_override
 
     try:
         cba_results = run_cba(**cba_inputs)

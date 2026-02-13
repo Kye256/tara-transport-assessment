@@ -5,6 +5,7 @@ Uses dash-leaflet (Leaflet.js via Dash).
 """
 
 import dash_leaflet as dl
+from dash import html
 from typing import Optional
 
 from skills.osm_facilities import FACILITY_CATEGORIES
@@ -219,13 +220,16 @@ def _build_endpoint_markers(road_data: dict) -> list:
 
 
 def build_condition_layer(geojson: dict) -> list:
-    """Build dash-leaflet CircleMarker components from video pipeline GeoJSON.
+    """Build dash-leaflet components from video pipeline GeoJSON.
+
+    Handles both LineString sections (from frames_to_condition_geojson)
+    and Point features (from frames_to_geojson).
 
     Args:
-        geojson: GeoJSON FeatureCollection from video pipeline (frames_to_geojson).
+        geojson: GeoJSON FeatureCollection from video pipeline.
 
     Returns:
-        List of dl.CircleMarker components, color-coded by condition class.
+        List of dl.Polyline or dl.CircleMarker components.
     """
     condition_colors = {
         "good": "#2d5f4a",
@@ -234,51 +238,123 @@ def build_condition_layer(geojson: dict) -> list:
         "bad": "#a83a2f",
     }
 
-    markers = []
+    layers = []
     for feature in geojson.get("features", []):
         props = feature.get("properties", {})
         geom = feature.get("geometry", {})
+        geom_type = geom.get("type", "")
         coords = geom.get("coordinates", [])
-        if len(coords) < 2:
+        if not coords:
             continue
 
-        lon, lat = coords[0], coords[1]
         condition = props.get("condition_class", "fair")
         color = condition_colors.get(condition, "#9a6b2f")
-        iri = props.get("iri_estimate", "?")
-        surface = props.get("surface_type", "?")
-        notes = props.get("notes", "")
-        distress = props.get("distress_types", [])
-        severity = props.get("distress_severity", "?")
 
-        tooltip_text = f"{condition.title()} | IRI ~{iri} | {surface}"
+        if geom_type == "LineString":
+            # Section polyline — coords are [[lon, lat], ...]
+            positions = [[c[1], c[0]] for c in coords]
+            weight = props.get("weight", 6)
+            avg_iri = props.get("avg_iri", "?")
+            surface = props.get("surface_type", "?")
+            distress = props.get("distress_types", "none")
+            notes = props.get("notes", "")
+            tooltip_text = f"{condition.title()} | IRI ~{avg_iri} | {surface}"
 
-        distress_str = ", ".join(distress) if distress else "none"
-        popup_html = (
-            f"<b>Condition: {condition.title()}</b><br>"
-            f"IRI: {iri} m/km<br>"
-            f"Surface: {surface}<br>"
-            f"Distress: {distress_str}<br>"
-            f"Severity: {severity}<br>"
-            f"<i>{notes}</i>"
-        )
-
-        markers.append(
-            dl.CircleMarker(
-                center=[lat, lon],
-                radius=8,
-                color="white",
-                weight=2,
-                fillColor=color,
-                fillOpacity=0.9,
-                children=[
-                    dl.Tooltip(tooltip_text),
-                    dl.Popup(popup_html),
-                ],
+            # Build popup as Dash components (not HTML strings)
+            popup_children = []
+            rep_image = props.get("representative_image", "")
+            if rep_image:
+                popup_children.append(
+                    html.Img(
+                        src=f"data:image/jpeg;base64,{rep_image}",
+                        style={"width": "300px", "borderRadius": "3px"},
+                    )
+                )
+            popup_children.append(
+                html.Div([
+                    html.Span(
+                        condition.upper(),
+                        style={
+                            "background": color, "color": "white",
+                            "padding": "2px 8px", "borderRadius": "2px",
+                            "fontSize": "11px", "fontWeight": "600",
+                        },
+                    ),
+                    html.Span(
+                        f" IRI ~{avg_iri} m/km",
+                        style={"color": "#5c5950", "fontSize": "12px", "marginLeft": "8px"},
+                    ),
+                ], style={"marginTop": "8px"})
             )
-        )
+            popup_children.append(
+                html.Div(
+                    f"{str(surface).replace('_', ' ').title()} surface \u00b7 {distress}",
+                    style={"fontSize": "12px", "color": "#2c2a26", "marginTop": "6px"},
+                )
+            )
+            if notes:
+                popup_children.append(
+                    html.Div(
+                        notes,
+                        style={"fontSize": "11px", "color": "#8a8578", "marginTop": "4px"},
+                    )
+                )
 
-    return markers
+            layers.append(
+                dl.Polyline(
+                    positions=positions,
+                    color=color,
+                    weight=weight,
+                    opacity=0.9,
+                    children=[
+                        dl.Tooltip(tooltip_text),
+                        dl.Popup(
+                            html.Div(popup_children, style={"maxWidth": "320px"}),
+                            maxWidth=350,
+                        ),
+                    ],
+                )
+            )
+
+        elif geom_type == "Point":
+            # Single point marker — coords are [lon, lat]
+            if len(coords) < 2:
+                continue
+            lon, lat = coords[0], coords[1]
+            iri = props.get("iri_estimate", props.get("avg_iri", "?"))
+            surface = props.get("surface_type", "?")
+            tooltip_text = f"{condition.title()} | IRI ~{iri} | {surface}"
+
+            distress = props.get("distress_types", [])
+            if isinstance(distress, list):
+                distress_str = ", ".join(distress) if distress else "none"
+            else:
+                distress_str = str(distress)
+
+            popup_html = (
+                f"<b>Condition: {condition.title()}</b><br>"
+                f"IRI: {iri} m/km<br>"
+                f"Surface: {surface}<br>"
+                f"Distress: {distress_str}<br>"
+                f"<i>{props.get('notes', '')}</i>"
+            )
+
+            layers.append(
+                dl.CircleMarker(
+                    center=[lat, lon],
+                    radius=8,
+                    color="white",
+                    weight=2,
+                    fillColor=color,
+                    fillOpacity=0.9,
+                    children=[
+                        dl.Tooltip(tooltip_text),
+                        dl.Popup(popup_html),
+                    ],
+                )
+            )
+
+    return layers
 
 
 def _surface_color(surface: str) -> str:
