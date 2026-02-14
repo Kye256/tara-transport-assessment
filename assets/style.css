@@ -127,8 +127,10 @@ body {
     flex: 1;
     text-align: center;
     padding: 6px 2px;
-    font-size: 0.7rem;
-    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 500;
+    text-transform: uppercase;
     color: var(--tara-slate-500);
     border-right: 1px solid var(--tara-slate-300);
     cursor: default;
@@ -136,7 +138,7 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    letter-spacing: 0.01em;
+    letter-spacing: 0.03em;
 }
 
 .tara-step-segment:last-child {
@@ -581,4 +583,33 @@ hr {
     padding-top: 12px;
     border-top: 1px solid var(--tara-slate-100);
     margin-top: 12px;
+}
+
+/* --- Begin Analysis Button --- */
+#begin-analysis-wrapper {
+    margin-top: 16px;
+}
+
+/* --- Manual Condition Toggle --- */
+.tara-manual-toggle {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--tara-slate-500);
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 0.15s;
+}
+
+.tara-manual-toggle:hover {
+    color: var(--tara-slate-900);
+}
+
+/* --- Helper Text --- */
+.tara-helper-text {
+    display: block;
+    font-family: var(--font-body);
+    font-size: 11px;
+    color: #8a8578;
+    margin-bottom: 4px;
+    line-height: 1.4;
 }

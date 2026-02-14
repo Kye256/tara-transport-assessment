@@ -11,7 +11,7 @@ SCF = 1 / (1 + FEP)  # Standard Conversion Factor = 0.930
 
 # Analysis parameters
 ANALYSIS_PERIOD = 20  # years from first year of operation
-BASE_YEAR = 2025
+BASE_YEAR = 2026
 RESIDUAL_VALUE_FACTOR = 0.75  # % of EPC as residual value at end of analysis
 
 # Vehicle classes

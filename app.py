@@ -1,5 +1,5 @@
 """
-TARA: Transport Assessment & Road Appraisal
+TARA: Transport Appraisal & Risk Analysis
 Main Dash Application — 7-step wizard with persistent map.
 
 "From road data to investment decision — in minutes, not months."
@@ -62,13 +62,12 @@ server = app.server
 server.config["MAX_CONTENT_LENGTH"] = 3 * 1024 * 1024 * 1024  # 3 GB
 
 STEP_LABELS = [
-    "Select Road",
-    "Condition",
+    "Road",
+    "Analyse",
     "Traffic",
     "Costs",
     "Results",
     "Sensitivity",
-    "Equity",
     "Report",
 ]
 
@@ -116,7 +115,7 @@ def _make_serializable(obj):
 # ============================================================
 
 def make_step_indicator(active_step: int = 1) -> html.Div:
-    """Build a segmented step bar (1-8)."""
+    """Build a segmented step bar (1-7)."""
     segments = []
     for i, label in enumerate(STEP_LABELS, 1):
         if i < active_step:
@@ -146,7 +145,7 @@ def _build_road_dropdown_options() -> list[dict]:
 def build_step1():
     return dbc.Card(dbc.CardBody([
         html.H5("Select Road", className="tara-heading"),
-        html.P("Choose a road from the Uganda UNRA network.", className="text-muted"),
+        html.P("Choose a road from the Uganda UNRA network to begin your appraisal.", className="text-muted"),
         dcc.Dropdown(
             id="road-select-dropdown",
             options=_build_road_dropdown_options(),
@@ -155,60 +154,21 @@ def build_step1():
             className="mb-3",
         ),
         dcc.Loading(type="circle", children=html.Div(id="road-search-result")),
+        html.Div(
+            dbc.Button("Begin Analysis \u2192", id="begin-analysis-btn",
+                       className="tara-btn-amber mt-3", size="lg",
+                       style={"width": "100%"}),
+            id="begin-analysis-wrapper",
+            style={"display": "none"},
+        ),
     ]), className="mb-3")
 
 
 def build_step2():
     return dbc.Card(dbc.CardBody([
-        html.H5("Road Condition", className="tara-heading"),
-        html.P("Describe the current road condition.", className="text-muted"),
-        dbc.Row([
-            dbc.Col([
-                dbc.Label("Surface Type"),
-                dbc.Select(
-                    id="surface-type-select",
-                    options=[
-                        {"label": "Asphalt", "value": "asphalt"},
-                        {"label": "Gravel", "value": "gravel"},
-                        {"label": "Earth/Dirt", "value": "earth"},
-                        {"label": "Concrete", "value": "concrete"},
-                        {"label": "Compacted", "value": "compacted"},
-                    ],
-                    value="gravel",
-                ),
-            ], md=6),
-            dbc.Col([
-                dbc.Label("Condition Rating"),
-                dbc.Select(
-                    id="condition-rating-select",
-                    options=[
-                        {"label": "Good (IRI 2-4)", "value": "good"},
-                        {"label": "Fair (IRI 4-8)", "value": "fair"},
-                        {"label": "Poor (IRI 8-14)", "value": "poor"},
-                        {"label": "Very Poor (IRI 14+)", "value": "very_poor"},
-                    ],
-                    value="poor",
-                ),
-            ], md=6),
-        ], className="mb-3"),
-        dbc.Row([
-            dbc.Col([
-                dbc.Label("IRI (m/km) \u2014 optional override"),
-                dbc.Input(id="iri-input", type="number", placeholder="e.g. 10",
-                          min=1, max=30, step=0.5),
-            ], md=6),
-        ], className="mb-3"),
-        html.Hr(),
-        html.P("Or upload a dashcam image/video:", className="text-muted"),
-        dcc.Upload(
-            id="dashcam-upload",
-            children=dbc.Button("Upload Dashcam File", color="outline-secondary", size="sm"),
-            accept=".jpg,.jpeg,.png,.mp4,.avi,.mov",
-            className="mb-2",
-        ),
-        html.Div(id="dashcam-result"),
-        html.Hr(),
-        html.P("Or run full video + GPS analysis:", className="text-muted fw-bold"),
+        html.H5("Analyse Road Condition", className="tara-heading"),
+        html.P("Run video + GPS analysis to assess road condition, or enter details manually.", className="text-muted"),
+        # --- Video Analysis (primary) ---
         dbc.Row([
             dbc.Col([
                 dcc.Dropdown(
@@ -234,6 +194,7 @@ def build_step2():
             dbc.Col([
                 dbc.Button("Run Video Analysis", id="run-video-btn",
                            className="tara-btn-amber", size="sm", disabled=True),
+                html.Small("~5 min for a typical survey", className="tara-helper-text d-block mt-1"),
             ], md=4),
         ], className="mb-2"),
         dbc.Row([
@@ -269,7 +230,59 @@ def build_step2():
             ),
         ]),
         dcc.Store(id="force-reanalyse-store", data=False),
-        dcc.Loading(type="default", children=html.Div(id="video-pipeline-result")),
+        html.Div(id="video-pipeline-result"),
+        html.Hr(),
+        # --- Manual Condition Entry (collapsed) ---
+        html.Div(
+            html.A("Or enter condition manually \u25be", id="manual-condition-toggle",
+                   href="#", className="tara-manual-toggle"),
+        ),
+        dbc.Collapse(
+            html.Div([
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Label("Surface Type"),
+                        dbc.Select(
+                            id="surface-type-select",
+                            options=[
+                                {"label": "Asphalt", "value": "asphalt"},
+                                {"label": "Gravel", "value": "gravel"},
+                                {"label": "Earth/Dirt", "value": "earth"},
+                                {"label": "Concrete", "value": "concrete"},
+                                {"label": "Compacted", "value": "compacted"},
+                            ],
+                            value="gravel",
+                        ),
+                    ], md=6),
+                    dbc.Col([
+                        dbc.Label("Condition Rating"),
+                        dbc.Select(
+                            id="condition-rating-select",
+                            options=[
+                                {"label": "Good (IRI 2-4)", "value": "good"},
+                                {"label": "Fair (IRI 4-8)", "value": "fair"},
+                                {"label": "Poor (IRI 8-14)", "value": "poor"},
+                                {"label": "Very Poor (IRI 14+)", "value": "very_poor"},
+                            ],
+                            value="poor",
+                        ),
+                    ], md=6),
+                ], className="mb-3"),
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Label("IRI (m/km) \u2014 optional override"),
+                        html.Small("International Roughness Index: lower is smoother", className="tara-helper-text"),
+                        dbc.Input(id="iri-input", type="number", placeholder="e.g. 10",
+                                  min=1, max=30, step=0.5),
+                    ], md=6),
+                ], className="mb-3"),
+            ]),
+            id="manual-condition-collapse",
+            is_open=False,
+        ),
+        # Hidden dashcam components (preserve IDs to avoid callback errors)
+        dcc.Upload(id="dashcam-upload", style={"display": "none"}),
+        html.Div(id="dashcam-result", style={"display": "none"}),
     ]), className="mb-3")
 
 
@@ -299,11 +312,13 @@ def build_step3():
         ]))
 
     return dbc.Card(dbc.CardBody([
+        html.Div(id="video-success-banner-step3"),
         html.H5("Traffic", className="tara-heading"),
-        html.P("Enter average daily traffic by vehicle class.", className="text-muted"),
+        html.P("Enter average daily traffic (ADT) by vehicle class.", className="text-muted"),
         dbc.Row([
             dbc.Col([
-                dbc.Label("Total ADT (vehicles/day)"),
+                dbc.Label("Total ADT (Average Daily Traffic)"),
+                html.Small("Vehicles per day in both directions", className="tara-helper-text"),
                 dbc.Input(id="total-adt-input", type="number",
                           value=DEFAULT_ADT, min=100, step=100),
             ], md=6),
@@ -321,6 +336,7 @@ def build_step3():
 
 def build_step4():
     return dbc.Card(dbc.CardBody([
+        html.Div(id="video-success-banner-step4"),
         html.H5("Costs", className="tara-heading"),
         html.P("Enter project costs and timing.", className="text-muted"),
         dbc.Row([
@@ -342,6 +358,7 @@ def build_step4():
             ], md=6),
             dbc.Col([
                 dbc.Label("Discount Rate (%)"),
+                html.Small("Rate used to convert future costs and benefits to present value", className="tara-helper-text"),
                 dbc.Input(id="discount-rate-input", type="number",
                           value=round(EOCK * 100, 1), min=1, max=25, step=0.5),
             ], md=6),
@@ -366,10 +383,14 @@ def build_step4():
 def build_step5():
     return dbc.Card(dbc.CardBody([
         html.H5("Results", className="tara-heading"),
-        html.P("Run the cost-benefit analysis.", className="text-muted"),
-        dbc.Button("Run Appraisal", id="run-cba-btn", className="tara-btn-amber mb-3",
+        html.P("Run the economic cost-benefit analysis to determine whether this road investment is justified.", className="text-muted"),
+        dbc.Button("Run Economic Analysis", id="run-cba-btn", className="tara-btn-amber mb-3",
                     size="lg"),
         dcc.Loading(type="default", children=html.Div(id="cba-results-area")),
+        html.Hr(),
+        html.Div(id="equity-summary-box"),
+        html.Div(id="equity-section-table"),
+        html.Div(id="equity-narrative-panel"),
     ]), className="mb-3")
 
 
@@ -387,16 +408,6 @@ def build_step6():
 
 
 def build_step7():
-    return dbc.Card(dbc.CardBody([
-        html.H5("Equity & Social Impact", className="tara-heading"),
-        html.P("Camera-observed equity indicators from the dashcam survey.", className="text-muted"),
-        html.Div(id="equity-summary-box"),
-        html.Div(id="equity-section-table"),
-        html.Div(id="equity-narrative-panel"),
-    ]), className="mb-3")
-
-
-def build_step8():
     return dbc.Card(dbc.CardBody([
         html.H5("Report", className="tara-heading"),
         html.P("Generate and download the appraisal report.", className="text-muted"),
@@ -422,7 +433,6 @@ ALL_STEPS = {
     5: build_step5(),
     6: build_step6(),
     7: build_step7(),
-    8: build_step8(),
 }
 
 
@@ -446,12 +456,13 @@ app.layout = html.Div([
     dcc.Store(id="ai-narrative-store", data=None),
     dcc.Store(id="map-bounds-store", data=None),
     dcc.Store(id="video-condition-store", data=None),
+    dcc.Store(id="video-success-store", data=None),
 
     # Header
     html.Div([
         html.Div([
             html.Span("TARA", className="tara-wordmark"),
-            html.Span("Transport Assessment & Road Appraisal", className="tara-subtitle d-none d-md-inline"),
+            html.Span("Transport Appraisal & Risk Analysis", className="tara-subtitle d-none d-md-inline"),
         ]),
         html.Span("Built with Claude Opus 4.6", className="tara-badge d-none d-md-inline"),
     ], className="tara-header"),
@@ -472,7 +483,7 @@ app.layout = html.Div([
                            outline=True, size="sm"),
                 dbc.Button("Next \u2192", id="next-btn", color="primary",
                            size="sm"),
-            ], className="tara-nav-buttons"),
+            ], id="nav-buttons-container", className="tara-nav-buttons"),
         ], className="tara-left-panel"),
 
         # Right: Map + Results
@@ -510,6 +521,26 @@ app.clientside_callback(
     prevent_initial_call=True,
 )
 
+# Clientside Callback: Show "Analysing..." message when video button clicked
+app.clientside_callback(
+    """
+    function(n_clicks) {
+        if (!n_clicks) return window.dash_clientside.no_update;
+        var el = document.getElementById('video-pipeline-result');
+        if (el) {
+            el.innerHTML = '<div class="tara-ai-block">'
+                + '<span class="tara-typing-dot"></span>'
+                + ' Analysing road condition\u2026 This may take a few minutes.'
+                + '</div>';
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("run-video-btn", "className"),
+    Input("run-video-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+
 # Clientside Callback: Map fitBounds
 # dash-leaflet's `bounds` prop doesn't reliably trigger Leaflet's fitBounds().
 # We use a store + clientside callback to invoke it via JS.
@@ -538,27 +569,80 @@ def navigate_steps(back_clicks, next_clicks, current_step):
     trigger = ctx.triggered_id
     if trigger == "back-btn" and current_step > 1:
         return current_step - 1
-    elif trigger == "next-btn" and current_step < 8:
+    elif trigger == "next-btn" and current_step < 7:
         return current_step + 1
     return no_update
 
 
 @callback(
     Output("step-indicator", "children"),
+    Output("step-indicator", "style"),
     Output("back-btn", "disabled"),
+    Output("back-btn", "style"),
     Output("next-btn", "disabled"),
-    *[Output(f"step-panel-{i}", "style") for i in range(1, 9)],
+    Output("next-btn", "style"),
+    *[Output(f"step-panel-{i}", "style") for i in range(1, 8)],
     Input("current-step-store", "data"),
 )
 def update_step_display(current_step):
     indicator = make_step_indicator(current_step)
     back_disabled = current_step <= 1
-    next_disabled = current_step >= 8
+    next_disabled = current_step >= 7
     styles = [
         {"display": "block"} if i == current_step else {"display": "none"}
-        for i in range(1, 9)
+        for i in range(1, 8)
     ]
-    return indicator, back_disabled, next_disabled, *styles
+    # Hide step bar and nav buttons on step 1 (landing state)
+    if current_step == 1:
+        indicator_style = {"display": "none"}
+        back_style = {"display": "none"}
+        next_style = {"display": "none"}
+    else:
+        indicator_style = {"display": "flex"}
+        back_style = {}
+        next_style = {}
+    return indicator, indicator_style, back_disabled, back_style, next_disabled, next_style, *styles
+
+
+# --- Step 1: Begin Analysis button visibility ---
+
+@callback(
+    Output("begin-analysis-wrapper", "style"),
+    Input("road-data-store", "data"),
+    prevent_initial_call=True,
+)
+def show_begin_analysis_btn(road_data):
+    """Show the Begin Analysis button once a road is selected."""
+    if road_data and road_data.get("found"):
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@callback(
+    Output("current-step-store", "data", allow_duplicate=True),
+    Input("begin-analysis-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def begin_analysis_click(n_clicks):
+    """Advance to Step 2 when Begin Analysis is clicked."""
+    if n_clicks:
+        return 2
+    return no_update
+
+
+# --- Step 2: Manual condition collapse toggle ---
+
+@callback(
+    Output("manual-condition-collapse", "is_open"),
+    Input("manual-condition-toggle", "n_clicks"),
+    State("manual-condition-collapse", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_manual_condition(n_clicks, is_open):
+    """Toggle the manual condition entry collapse."""
+    if n_clicks:
+        return not is_open
+    return no_update
 
 
 # --- Step 1: Road Selection ---
@@ -994,6 +1078,8 @@ def confirm_reanalyse(submit_n_clicks):
     Output("video-condition-store", "data"),
     Output("main-map", "children", allow_duplicate=True),
     Output("map-bounds-store", "data", allow_duplicate=True),
+    Output("current-step-store", "data", allow_duplicate=True),
+    Output("video-success-store", "data"),
     Input("run-video-btn", "n_clicks"),
     Input("force-reanalyse-store", "data"),
     State("video-path-input", "value"),
@@ -1020,7 +1106,7 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
         if not os.path.exists(vp):
             return (
                 dbc.Alert(f"Video path not found: {vp}", color="danger"),
-                no_update, no_update, no_update, no_update,
+                no_update, no_update, no_update, no_update, no_update, no_update,
             )
         video_path = vp
 
@@ -1029,14 +1115,14 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
         if not os.path.exists(gp):
             return (
                 dbc.Alert(f"GPX path not found: {gp}", color="danger"),
-                no_update, no_update, no_update, no_update,
+                no_update, no_update, no_update, no_update, no_update, no_update,
             )
         gpx_path = gp
 
     if not video_path or not gpx_path:
         return (
             dbc.Alert("Please provide both video and GPX paths.", color="warning"),
-            no_update, no_update, no_update, no_update,
+            no_update, no_update, no_update, no_update, no_update, no_update,
         )
 
     try:
@@ -1072,7 +1158,7 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
                 alert_children.append(html.Small("; ".join(warnings)))
             return (
                 dbc.Alert(alert_children, color="danger"),
-                no_update, no_update, no_update, no_update,
+                no_update, no_update, no_update, no_update, no_update, no_update,
             )
 
         summary = result["summary"]
@@ -1201,6 +1287,8 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
             }),
             map_children,
             bounds,
+            3,     # Auto-advance to Step 3 (Traffic)
+            True,  # video-success-store
         )
 
     except Exception as e:
@@ -1208,8 +1296,54 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
         traceback.print_exc()
         return (
             dbc.Alert(f"Video pipeline error: {str(e)}", color="danger"),
-            no_update, no_update, no_update, no_update,
+            no_update, no_update, no_update, no_update, no_update, no_update,
         )
+
+
+# --- Navigation Gating ---
+
+@callback(
+    Output("next-btn", "disabled", allow_duplicate=True),
+    Input("current-step-store", "data"),
+    Input("road-data-store", "data"),
+    Input("condition-store", "data"),
+    Input("total-adt-input", "value"),
+    Input("total-cost-input", "value"),
+    Input("results-store", "data"),
+    prevent_initial_call=True,
+)
+def gate_next_button(current_step, road_data, condition_data, adt, cost, results):
+    """Disable Next button when required data is missing for the current step."""
+    if current_step == 1:
+        return True  # Always disabled on step 1 (use Begin Analysis)
+    elif current_step == 2:
+        return not (condition_data and condition_data.get("source"))
+    elif current_step == 3:
+        return not (adt and adt > 0)
+    elif current_step == 4:
+        return not (cost and cost > 0)
+    elif current_step == 5:
+        return not results
+    return False  # Steps 6+ are ungated
+
+
+# --- Steps 3-4: Video success banners ---
+
+@callback(
+    Output("video-success-banner-step3", "children"),
+    Output("video-success-banner-step4", "children"),
+    Input("video-success-store", "data"),
+    prevent_initial_call=True,
+)
+def show_video_success_banners(success):
+    """Show green banners on Steps 3 and 4 after successful video analysis."""
+    if success:
+        banner = dbc.Alert(
+            "Road condition analysed successfully. Review and adjust the values below.",
+            color="success", className="py-2 mb-2",
+        )
+        return banner, banner
+    return html.Div(), html.Div()
 
 
 # --- Step 4: Cost per km ---
@@ -1470,7 +1604,7 @@ def run_cba_callback(
         "construction_years": int(construction_years or 3),
         "discount_rate": discount_rate,
         "analysis_period": int(analysis_period or 20),
-        "base_year": int(base_year or 2025),
+        "base_year": int(base_year or 2026),
         "vehicle_split": vehicle_split,
     }
     if voc_without_override:
@@ -1518,10 +1652,10 @@ def run_cba_callback(
     bcr_color = "positive" if cba_results.get("bcr", 0) > 1 else "negative"
 
     metric_row = html.Div([
-        _metric_card("NPV", f"${cba_results.get('npv', 0):,.0f}", "success" if npv_color == "positive" else "danger"),
-        _metric_card("EIRR", f"{s.get('eirr_pct', 'N/A')}%", "success" if eirr_color == "positive" else "warning"),
-        _metric_card("BCR", f"{cba_results.get('bcr', 0):.2f}", "success" if bcr_color == "positive" else "danger"),
-        _metric_card("FYRR", f"{s.get('fyrr_pct', 'N/A')}%", "info"),
+        _metric_card("NPV (Net Present Value)", f"${cba_results.get('npv', 0):,.0f}", "success" if npv_color == "positive" else "danger"),
+        _metric_card("EIRR (Economic Internal Rate of Return)", f"{s.get('eirr_pct', 'N/A')}%", "success" if eirr_color == "positive" else "warning"),
+        _metric_card("BCR (Benefit-Cost Ratio)", f"{cba_results.get('bcr', 0):.2f}", "success" if bcr_color == "positive" else "danger"),
+        _metric_card("FYRR (First Year Rate of Return)", f"{s.get('fyrr_pct', 'N/A')}%", "info"),
     ], className="tara-metric-row")
 
     verdict_badge = html.Div(verdict_text, className=verdict_cls)
@@ -1581,7 +1715,7 @@ def build_sensitivity_controls(current_step, results):
     if current_step != 6:
         return no_update
     if not results:
-        return dbc.Alert("Run the appraisal in Step 5 first.", color="warning")
+        return dbc.Alert("Run the economic analysis in Step 5 first.", color="warning")
 
     return html.Div([
         dbc.Label("Construction Cost Change (%)"),
@@ -1617,7 +1751,7 @@ def build_sensitivity_controls(current_step, results):
 def update_sensitivity(cost_chg, traffic_chg, growth_chg,
                        full_clicks, cba_inputs, base_results):
     if not cba_inputs or not base_results:
-        return dbc.Alert("Run the appraisal in Step 5 first.", color="warning"), no_update
+        return dbc.Alert("Run the economic analysis in Step 5 first.", color="warning"), no_update
 
     trigger = ctx.triggered_id
 
@@ -1652,10 +1786,16 @@ def update_sensitivity(cost_chg, traffic_chg, growth_chg,
 
         sv_table = html.Div()
         if sv_rows:
-            sv_table = html.Table([
-                html.Thead(html.Tr([html.Th("Variable"), html.Th("Switching Value")])),
-                html.Tbody(sv_rows),
-            ], className="tara-table mt-2")
+            sv_table = html.Div([
+                html.Table([
+                    html.Thead(html.Tr([html.Th("Variable"), html.Th("Switching Value")])),
+                    html.Tbody(sv_rows),
+                ], className="tara-table mt-2"),
+                html.Small(
+                    "Switching values show how much each variable must change before the project becomes unviable (NPV = 0).",
+                    className="tara-helper-text",
+                ),
+            ])
 
         summary = sens.get("summary", {})
         risk = dbc.Alert(summary.get("risk_assessment", ""), color="info", className="mt-2")
@@ -1754,7 +1894,7 @@ def ai_interpretation_error_fallback(n_clicks, cba_results):
     ])
 
 
-# --- Step 7: Equity & Social Impact ---
+# --- Step 5: Equity & Social Impact (shown below CBA results) ---
 
 @callback(
     Output("equity-summary-box", "children"),
@@ -1765,8 +1905,8 @@ def ai_interpretation_error_fallback(n_clicks, cba_results):
     State("condition-store", "data"),
 )
 def show_equity_step(current_step, video_data, condition_data):
-    """Populate Step 7 with equity summary, section table, and narrative."""
-    if current_step != 7:
+    """Populate equity summary, section table, and narrative in Results step."""
+    if current_step != 5:
         return html.Div(), html.Div(), html.Div()
 
     # Check if equity data is available
@@ -1955,7 +2095,7 @@ def show_equity_step(current_step, video_data, condition_data):
     return summary_box, table, narrative_panel
 
 
-# --- Step 8: PDF ---
+# --- Step 7: PDF ---
 
 @callback(
     Output("download-pdf", "data"),
@@ -1999,7 +2139,7 @@ def generate_pdf_report(n_clicks, road_data, facilities_data, pop_data,
         return no_update, dbc.Alert(f"Error generating report: {str(e)}", color="danger")
 
 
-# --- Step 8: CSV ---
+# --- Step 7: CSV ---
 
 @callback(
     Output("download-csv", "data"),
@@ -2036,7 +2176,7 @@ def export_csv(n_clicks, cba_results, road_data):
     return dcc.send_data_frame(df.to_csv, f"TARA_Cashflows_{road_name}_{date_str}.csv", index=False)
 
 
-# --- Step 8: Report Preview ---
+# --- Step 7: Report Preview ---
 
 @callback(
     Output("report-summary", "children"),
@@ -2044,7 +2184,7 @@ def export_csv(n_clicks, cba_results, road_data):
     Input("current-step-store", "data"),
 )
 def show_report_summary(cba_results, current_step):
-    if current_step != 8 or not cba_results:
+    if current_step != 7 or not cba_results:
         return html.Div()
 
     from output.report import generate_report_markdown
