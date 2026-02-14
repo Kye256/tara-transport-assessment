@@ -233,7 +233,7 @@ body {
     flex: 1;
     min-width: 80px;
     background: var(--tara-white);
-    border: 1px solid var(--tara-slate-300);
+    border: 2px solid var(--tara-green-700);
     border-radius: var(--radius-sm);
     padding: 10px 12px;
     text-align: center;
@@ -574,13 +574,13 @@ body {
 .tara-verdict.viable {
     background: var(--tara-green-100);
     color: var(--tara-green-700);
-    border: 1px solid var(--tara-green-300);
+    border: 2px solid var(--tara-green-700);
 }
 
 .tara-verdict.not-viable {
     background: var(--tara-red-light);
     color: var(--tara-red);
-    border: 1px solid var(--tara-red);
+    border: 2px solid var(--tara-red);
 }
 
 /* --- Misc --- */
@@ -688,13 +688,13 @@ hr {
 }
 .equity-card {
     background: #f7f6f3;
-    border: 1px solid #e8e5de;
+    border: 2px solid var(--tara-green-700);
     border-radius: var(--radius-sm);
     padding: 14px;
-    border-left: 3px solid var(--tara-green-700);
+    border-left: 4px solid var(--tara-green-700);
 }
 .equity-card.concern {
-    border-left-color: var(--tara-red);
+    border-left: 4px solid var(--tara-red);
 }
 .equity-card-icon {
     font-size: 20px;
@@ -762,7 +762,7 @@ hr {
 /* --- Chart Container --- */
 .chart-container {
     background: white;
-    border: 1px solid #e8e5de;
+    border: 2px solid var(--tara-green-700);
     border-radius: var(--radius-sm);
     padding: 16px;
     margin-bottom: 16px;
