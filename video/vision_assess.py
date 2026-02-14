@@ -9,12 +9,20 @@ import time
 
 VISION_PROMPT = """You are a road condition assessment expert analysing dashcam footage from Uganda.
 
-Look at this road image and assess the visible road condition. Respond ONLY with valid JSON, no markdown, no backticks, no explanation:
+Look at this road image and assess the visible road condition AND the activity/people visible. Respond ONLY with valid JSON, no markdown, no backticks, no explanation:
 
-{"surface_type":"paved or gravel or earth or mixed or under_construction","condition_class":"good or fair or poor or bad","iri_estimate":8.5,"distress_types":["list","of","visible","issues"],"distress_severity":"none or low or moderate or high or severe","roadside_environment":"urban or peri_urban or rural","notes":"One sentence observation max 20 words"}
+{"surface_type":"paved or gravel or earth or mixed or under_construction","condition_class":"good or fair or poor or bad","iri_estimate":8.5,"distress_types":["list","of","visible","issues"],"distress_severity":"none or low or moderate or high or severe","roadside_environment":"urban or peri_urban or rural","notes":"One sentence observation max 20 words","activity_profile":{"land_use":"trading_centre or residential or agricultural or institutional or mixed or open","activity_level":"high or moderate or low or none","people_observed":{"pedestrians":"many or some or few or none","school_children":false,"vendors_roadside":false,"people_carrying_loads":false},"vehicles_observed":{"boda_bodas":"many or some or few or none","bicycles":"many or some or few or none","minibus_taxi":"many or some or few or none","cars":"many or some or few or none","trucks":"many or some or few or none"},"facilities_visible":["shops","market_stalls","none"],"nmt_infrastructure":{"footpath":"good or poor or none","shoulder_usable":false,"pedestrians_on_carriageway":false}}}
 
 Valid distress_types: pothole, cracking, rutting, edge_break, patching, raveling, corrugation, erosion, none
-IRI ranges: good paved 2-4, fair paved 4-6, poor paved 6-10, good gravel 6-8, fair gravel 8-12, poor gravel 12-16, bad any 16+"""
+IRI ranges: good paved 2-4, fair paved 4-6, poor paved 6-10, good gravel 6-8, fair gravel 8-12, poor gravel 12-16, bad any 16+
+
+Activity profile guidance:
+- land_use: What is the dominant land use VISIBLE from the road? trading_centre = shops/stalls/commercial, residential = houses/compounds, agricultural = farmland/open, institutional = school/hospital/government, mixed = combination, open = undeveloped
+- activity_level: How much human activity is visible? high = many people, vehicles, commerce. moderate = some activity. low = few people. none = empty.
+- people_observed: What kinds of people can you see? Look for pedestrians on or near the road, children in school uniforms, roadside vendors/sellers, people carrying goods/water/firewood on their heads or by bicycle.
+- vehicles_observed: What vehicle types are visible? boda_bodas = motorcycle taxis (very common in Uganda). Look at the MIX — a road dominated by boda-bodas and pedestrians serves different users than one dominated by trucks and cars.
+- facilities_visible: List ALL facility types you can see or identify from signs. Include shops, market_stalls, school, church, mosque, health_facility, fuel_station. Report "none" if no facilities visible.
+- nmt_infrastructure: Is there a footpath/sidewalk alongside the road? Is the road shoulder wide and smooth enough for pedestrians to walk on safely? Are pedestrians walking ON the carriageway (the road surface where vehicles drive)?"""
 
 DEFAULT_ASSESSMENT = {
     "surface_type": "unknown",
@@ -24,6 +32,14 @@ DEFAULT_ASSESSMENT = {
     "distress_severity": "moderate",
     "roadside_environment": "peri_urban",
     "notes": "Assessment could not be completed",
+    "activity_profile": {
+        "land_use": "unknown",
+        "activity_level": "unknown",
+        "people_observed": {"pedestrians": "none", "school_children": False, "vendors_roadside": False, "people_carrying_loads": False},
+        "vehicles_observed": {"boda_bodas": "none", "bicycles": "none", "minibus_taxi": "none", "cars": "none", "trucks": "none"},
+        "facilities_visible": ["none"],
+        "nmt_infrastructure": {"footpath": "none", "shoulder_usable": False, "pedestrians_on_carriageway": False},
+    },
 }
 
 
@@ -33,7 +49,7 @@ def assess_frame(image_base64: str, anthropic_client, model: str = "claude-opus-
         try:
             response = anthropic_client.messages.create(
                 model=model,
-                max_tokens=300,
+                max_tokens=600,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -53,7 +69,10 @@ def assess_frame(image_base64: str, anthropic_client, model: str = "claude-opus-
             # Strip markdown code blocks if present
             text = re.sub(r'^```(?:json)?\s*', '', text)
             text = re.sub(r'\s*```$', '', text)
-            return json.loads(text)
+            result = json.loads(text)
+            # Ensure activity_profile has safe defaults
+            result.setdefault("activity_profile", DEFAULT_ASSESSMENT["activity_profile"])
+            return result
         except json.JSONDecodeError:
             if attempt == 0:
                 continue
@@ -100,6 +119,45 @@ def assess_frame_mock(image_base64: str) -> dict:
     severity_cycle = ["none", "low", "moderate", "high", "severe"]
     env_cycle = ["urban", "peri_urban", "rural"]
 
+    # Mock activity profile — cycling through realistic Uganda scenarios
+    land_use_cycle = ["trading_centre", "residential", "agricultural", "mixed", "residential", "trading_centre"]
+    activity_cycle = ["high", "moderate", "low", "moderate", "high", "low"]
+    ped_cycle = ["many", "some", "few", "none", "some", "many"]
+    boda_cycle = ["many", "some", "few", "many", "some", "few"]
+    footpath_cycle = ["none", "poor", "none", "good", "poor", "none"]
+    facilities_cycle = [
+        ["shops", "market_stalls"],
+        ["none"],
+        ["none"],
+        ["school", "church"],
+        ["shops"],
+        ["health_facility", "shops"],
+    ]
+
+    activity_profile = {
+        "land_use": land_use_cycle[idx % len(land_use_cycle)],
+        "activity_level": activity_cycle[idx % len(activity_cycle)],
+        "people_observed": {
+            "pedestrians": ped_cycle[idx % len(ped_cycle)],
+            "school_children": idx % 5 == 3,
+            "vendors_roadside": idx % 3 == 0,
+            "people_carrying_loads": idx % 4 == 1,
+        },
+        "vehicles_observed": {
+            "boda_bodas": boda_cycle[idx % len(boda_cycle)],
+            "bicycles": ped_cycle[(idx + 2) % len(ped_cycle)],
+            "minibus_taxi": "some" if idx % 3 == 0 else "few",
+            "cars": "some" if idx % 2 == 0 else "few",
+            "trucks": "few" if idx % 4 != 0 else "some",
+        },
+        "facilities_visible": facilities_cycle[idx % len(facilities_cycle)],
+        "nmt_infrastructure": {
+            "footpath": footpath_cycle[idx % len(footpath_cycle)],
+            "shoulder_usable": idx % 3 == 2,
+            "pedestrians_on_carriageway": footpath_cycle[idx % len(footpath_cycle)] == "none",
+        },
+    }
+
     return {
         "surface_type": surface,
         "condition_class": condition,
@@ -108,6 +166,7 @@ def assess_frame_mock(image_base64: str) -> dict:
         "distress_severity": severity_cycle[idx % len(severity_cycle)],
         "roadside_environment": env_cycle[idx % len(env_cycle)],
         "notes": _MOCK_NOTES[idx % len(_MOCK_NOTES)],
+        "activity_profile": activity_profile,
     }
 
 

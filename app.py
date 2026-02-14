@@ -68,6 +68,7 @@ STEP_LABELS = [
     "Costs",
     "Results",
     "Sensitivity",
+    "Equity",
     "Report",
 ]
 
@@ -115,7 +116,7 @@ def _make_serializable(obj):
 # ============================================================
 
 def make_step_indicator(active_step: int = 1) -> html.Div:
-    """Build a segmented step bar (1-7)."""
+    """Build a segmented step bar (1-8)."""
     segments = []
     for i, label in enumerate(STEP_LABELS, 1):
         if i < active_step:
@@ -257,6 +258,17 @@ def build_step2():
         dcc.Upload(id="dashcam-video-upload", style={"display": "none"}),
         dcc.Upload(id="gpx-upload", style={"display": "none"}),
         html.Div(id="video-upload-status", className="mb-2"),
+        html.Div(id="video-cache-status", className="mb-2"),
+        html.Div([
+            dbc.Button("Re-analyse (uses API credits)", id="reanalyse-video-btn",
+                       color="outline-danger", size="sm", style={"display": "none"}),
+            dcc.ConfirmDialog(
+                id="reanalyse-confirm",
+                message="Re-analysing will use approximately $10-15 in API credits. "
+                        "The previous cached results will be replaced. Continue?",
+            ),
+        ]),
+        dcc.Store(id="force-reanalyse-store", data=False),
         dcc.Loading(type="default", children=html.Div(id="video-pipeline-result")),
     ]), className="mb-3")
 
@@ -376,6 +388,16 @@ def build_step6():
 
 def build_step7():
     return dbc.Card(dbc.CardBody([
+        html.H5("Equity & Social Impact", className="tara-heading"),
+        html.P("Camera-observed equity indicators from the dashcam survey.", className="text-muted"),
+        html.Div(id="equity-summary-box"),
+        html.Div(id="equity-section-table"),
+        html.Div(id="equity-narrative-panel"),
+    ]), className="mb-3")
+
+
+def build_step8():
+    return dbc.Card(dbc.CardBody([
         html.H5("Report", className="tara-heading"),
         html.P("Generate and download the appraisal report.", className="text-muted"),
         html.Div([
@@ -400,6 +422,7 @@ ALL_STEPS = {
     5: build_step5(),
     6: build_step6(),
     7: build_step7(),
+    8: build_step8(),
 }
 
 
@@ -515,7 +538,7 @@ def navigate_steps(back_clicks, next_clicks, current_step):
     trigger = ctx.triggered_id
     if trigger == "back-btn" and current_step > 1:
         return current_step - 1
-    elif trigger == "next-btn" and current_step < 7:
+    elif trigger == "next-btn" and current_step < 8:
         return current_step + 1
     return no_update
 
@@ -524,16 +547,16 @@ def navigate_steps(back_clicks, next_clicks, current_step):
     Output("step-indicator", "children"),
     Output("back-btn", "disabled"),
     Output("next-btn", "disabled"),
-    *[Output(f"step-panel-{i}", "style") for i in range(1, 8)],
+    *[Output(f"step-panel-{i}", "style") for i in range(1, 9)],
     Input("current-step-store", "data"),
 )
 def update_step_display(current_step):
     indicator = make_step_indicator(current_step)
     back_disabled = current_step <= 1
-    next_disabled = current_step >= 7
+    next_disabled = current_step >= 8
     styles = [
         {"display": "block"} if i == current_step else {"display": "none"}
-        for i in range(1, 8)
+        for i in range(1, 9)
     ]
     return indicator, back_disabled, next_disabled, *styles
 
@@ -850,6 +873,119 @@ def update_video_upload_status(video_path, gpx_path):
     return html.Div(parts), not both_ready
 
 
+# --- Step 2: Cache status ---
+
+def _check_cache_status(video_path: str, gpx_path: str) -> dict:
+    """Check cache status for a dataset. Returns info dict."""
+    from video.video_pipeline import _get_cache_path
+    try:
+        cache_path = _get_cache_path(video_path, gpx_path, 25)
+        if not os.path.exists(cache_path):
+            return {"exists": False}
+        with open(cache_path) as f:
+            data = json.load(f)
+        meta = data.get("metadata", {})
+        frames = data.get("frames", [])
+        features = data.get("geojson", {}).get("features", [])
+        # Check if equity data is present in frames
+        has_equity = False
+        for frame in frames[:5]:
+            ap = frame.get("assessment", {}).get("activity_profile")
+            if ap and ap.get("land_use") not in (None, "unknown", ""):
+                has_equity = True
+                break
+        return {
+            "exists": True,
+            "timestamp": meta.get("timestamp", ""),
+            "frames": meta.get("frames_sent_to_vision", len(frames)),
+            "sections": len(features),
+            "has_equity": has_equity,
+            "distance_km": meta.get("total_distance_km", 0),
+        }
+    except Exception:
+        return {"exists": False}
+
+
+@callback(
+    Output("video-cache-status", "children"),
+    Output("reanalyse-video-btn", "style"),
+    Input("video-path-input", "value"),
+    Input("gpx-path-input", "value"),
+    prevent_initial_call=True,
+)
+def show_cache_status(video_path, gpx_path):
+    """Show cache status when dataset paths are set."""
+    if not video_path or not gpx_path:
+        return html.Div(), {"display": "none"}
+
+    info = _check_cache_status(video_path.strip(), gpx_path.strip())
+    if not info["exists"]:
+        return html.Small(
+            "No cached results. Analysis will use API credits.",
+            className="text-muted",
+        ), {"display": "none"}
+
+    # Format timestamp
+    ts = info["timestamp"]
+    if ts:
+        try:
+            from datetime import datetime as _dt
+            dt = _dt.fromisoformat(ts)
+            ts_display = dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            ts_display = ts[:16]
+    else:
+        ts_display = "unknown"
+
+    equity_indicator = html.Span(
+        " Equity observations included" if info["has_equity"]
+        else " No equity data \u2014 re-analyse to include",
+        style={"color": "#2d5f4a" if info["has_equity"] else "#9a6b2f"},
+    )
+
+    status = html.Div([
+        html.Small([
+            html.Strong("Cached result available"),
+            f" (analysed {ts_display})",
+        ], className="d-block", style={"color": "#5c5950"}),
+        html.Small([
+            f"Frames: {info['frames']} assessed | "
+            f"Sections: {info['sections']} | "
+            f"{info['distance_km']:.1f} km",
+        ], className="d-block text-muted", style={"fontFamily": "DM Mono"}),
+        html.Small(equity_indicator, className="d-block"),
+    ], style={
+        "background": "#f0eeea", "border": "1px solid #ddd9d1",
+        "borderRadius": "4px", "padding": "8px 12px", "marginTop": "4px",
+    })
+
+    return status, {"display": "inline-block"}
+
+
+# --- Step 2: Re-analyse confirmation flow ---
+
+@callback(
+    Output("reanalyse-confirm", "displayed"),
+    Input("reanalyse-video-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def trigger_reanalyse_confirm(n_clicks):
+    """Show confirmation dialog when re-analyse button clicked."""
+    return True
+
+
+@callback(
+    Output("force-reanalyse-store", "data"),
+    Input("reanalyse-confirm", "submit_n_clicks"),
+    prevent_initial_call=True,
+)
+def confirm_reanalyse(submit_n_clicks):
+    """Set force-reanalyse flag when user confirms."""
+    if submit_n_clicks:
+        return True
+    raise dash.exceptions.PreventUpdate
+
+
 # --- Step 2: Video Pipeline ---
 
 @callback(
@@ -859,6 +995,7 @@ def update_video_upload_status(video_path, gpx_path):
     Output("main-map", "children", allow_duplicate=True),
     Output("map-bounds-store", "data", allow_duplicate=True),
     Input("run-video-btn", "n_clicks"),
+    Input("force-reanalyse-store", "data"),
     State("video-path-input", "value"),
     State("gpx-path-input", "value"),
     State("frame-interval-dropdown", "value"),
@@ -866,11 +1003,14 @@ def update_video_upload_status(video_path, gpx_path):
     State("main-map", "children"),
     prevent_initial_call=True,
 )
-def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
+def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_input,
                        frame_interval_meters, road_data, current_map_children):
     """Run the full video + GPS analysis pipeline using local file paths."""
-    if not n_clicks:
-        return no_update, no_update, no_update, no_update, no_update
+    trigger = ctx.triggered_id
+    if trigger == "force-reanalyse-store" and not force_reanalyse:
+        raise dash.exceptions.PreventUpdate
+    if trigger == "run-video-btn" and not n_clicks:
+        raise dash.exceptions.PreventUpdate
 
     video_path = None
     gpx_path = None
@@ -900,6 +1040,18 @@ def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
         )
 
     try:
+        # Delete cache if re-analyse was requested
+        use_cache = True
+        if trigger == "force-reanalyse-store" and force_reanalyse:
+            from video.video_pipeline import _get_cache_path
+            try:
+                cache_path = _get_cache_path(video_path, gpx_path, frame_interval_meters or 25)
+                if os.path.exists(cache_path):
+                    os.remove(cache_path)
+                    print(f"  Cache deleted for re-analysis: {cache_path}")
+            except Exception as e:
+                print(f"  Warning: Could not delete cache: {e}")
+            use_cache = False
 
         from video.video_pipeline import run_pipeline
         result = run_pipeline(
@@ -907,6 +1059,7 @@ def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
             gpx_path=gpx_path,
             frame_interval_meters=frame_interval_meters or 25,
             use_mock=False,
+            use_cache=use_cache,
         )
 
         # Handle pipeline error responses (size guards, memory errors, etc.)
@@ -925,6 +1078,7 @@ def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
         summary = result["summary"]
         geojson = result["geojson"]
         narrative = result.get("narrative", "")
+        equity_narrative = result.get("equity_narrative", "")
         metadata = result.get("metadata", {})
         panel_data = result.get("panel_data", {})
 
@@ -1043,6 +1197,7 @@ def run_video_pipeline(n_clicks, video_path_input, gpx_path_input,
             _make_serializable({
                 "summary": summary, "geojson": geojson, "panel_data": panel_data,
                 "interventions": result.get("interventions", {}),
+                "equity_narrative": equity_narrative,
             }),
             map_children,
             bounds,
@@ -1599,7 +1754,208 @@ def ai_interpretation_error_fallback(n_clicks, cba_results):
     ])
 
 
-# --- Step 7: PDF ---
+# --- Step 7: Equity & Social Impact ---
+
+@callback(
+    Output("equity-summary-box", "children"),
+    Output("equity-section-table", "children"),
+    Output("equity-narrative-panel", "children"),
+    Input("current-step-store", "data"),
+    State("video-condition-store", "data"),
+    State("condition-store", "data"),
+)
+def show_equity_step(current_step, video_data, condition_data):
+    """Populate Step 7 with equity summary, section table, and narrative."""
+    if current_step != 7:
+        return html.Div(), html.Div(), html.Div()
+
+    # Check if equity data is available
+    if not video_data or "geojson" not in video_data:
+        msg = html.Div(
+            dbc.Alert(
+                "Equity data not available for this survey. Re-run video analysis "
+                "with the latest version to generate equity observations.",
+                color="info",
+            )
+        )
+        return msg, html.Div(), html.Div()
+
+    features = video_data.get("geojson", {}).get("features", [])
+    if not features:
+        return html.Div(), html.Div(), html.Div()
+
+    # ── Gather section equity data ─────────────────────────────────
+    sections = []
+    for feat in features:
+        props = feat.get("properties", {})
+        equity = props.get("equity", {})
+        sections.append({
+            "section_index": props.get("section_index", 0),
+            "length_km": props.get("length_km", 0),
+            "condition_class": props.get("condition_class", "?"),
+            "surface_type": props.get("surface_type", "?"),
+            "equity": equity,
+        })
+
+    # ── Section A: Key Findings Summary ────────────────────────────
+    total_sections = len(sections)
+    high_sections = [s for s in sections if s["equity"].get("equity_concern") == "high"]
+    moderate_sections = [s for s in sections if s["equity"].get("equity_concern") == "moderate"]
+    high_ids = ", ".join(str(s["section_index"] + 1) for s in high_sections)
+    school_sections = [s for s in sections if s["equity"].get("school_children_observed")]
+    school_ids = ", ".join(str(s["section_index"] + 1) for s in school_sections)
+    no_footpath = [s for s in sections if s["equity"].get("nmt_footpath") == "none"]
+
+    # Collect all facilities and dominant vehicles
+    all_facilities = set()
+    all_vehicles = {}
+    for s in sections:
+        for f in s["equity"].get("facilities_seen", []):
+            if f and f != "none":
+                all_facilities.add(f.replace("_", " ").title())
+        for vtype, level in s["equity"].get("vehicle_mix_summary", {}).items():
+            if level in ("many", "some"):
+                vname = vtype.replace("_", " ").title()
+                if vname not in all_vehicles or level == "many":
+                    all_vehicles[vname] = level
+
+    facilities_str = ", ".join(sorted(all_facilities)) if all_facilities else "None observed"
+    dominant_users = ", ".join(sorted(all_vehicles.keys())) if all_vehicles else "Unknown"
+    # Always include pedestrians if seen
+    ped_sections = [s for s in sections if s["equity"].get("pedestrian_presence") in ("many", "some")]
+    if ped_sections and "Pedestrians" not in dominant_users:
+        dominant_users = "Pedestrians, " + dominant_users
+
+    mono = {"fontFamily": "DM Mono, monospace", "fontSize": "0.8rem"}
+    label_style = {"color": "#8a8578", "minWidth": "200px", "display": "inline-block"}
+
+    def _summary_line(label, value):
+        return html.Div([
+            html.Span(label, style=label_style),
+            html.Span(value, style={"fontWeight": "500"}),
+        ], style={**mono, "marginBottom": "3px"})
+
+    summary_box = html.Div([
+        html.Div("EQUITY SUMMARY", style={
+            "fontSize": "0.65rem", "fontFamily": "DM Mono, monospace",
+            "textTransform": "uppercase", "letterSpacing": "0.05em",
+            "color": "#8a8578", "marginBottom": "8px", "fontWeight": "600",
+        }),
+        _summary_line("Sections surveyed:", str(total_sections)),
+        _summary_line("High equity concern:",
+                       f"{len(high_sections)} (Sections {high_ids})" if high_sections else "0"),
+        _summary_line("Facilities observed:", facilities_str),
+        _summary_line("Dominant road users:", dominant_users),
+        _summary_line("NMT provision:",
+                       f"{len(no_footpath)} of {total_sections} sections have no footpath"),
+        _summary_line("School children observed:",
+                       f"Sections {school_ids}" if school_sections else "None observed"),
+    ], style={
+        "background": "#f0eeea", "border": "1px solid #ddd9d1",
+        "borderRadius": "4px", "padding": "12px 16px", "marginBottom": "16px",
+    })
+
+    # ── Section B: Per-Section Equity Table ────────────────────────
+    concern_colors = {"high": "#a83a2f", "moderate": "#9a6b2f", "low": "#5c5950"}
+    concern_bg = {"high": "#a83a2f15", "moderate": "#9a6b2f15"}
+
+    th_style = {
+        "fontSize": "0.6rem", "fontFamily": "DM Mono, monospace",
+        "textTransform": "uppercase", "color": "#8a8578",
+        "padding": "6px 10px", "borderBottom": "2px solid #ddd9d1",
+        "whiteSpace": "nowrap",
+    }
+    td_style = {"fontSize": "0.75rem", "padding": "6px 10px", "borderBottom": "1px solid #e8e5de"}
+
+    header = html.Thead(html.Tr([
+        html.Th("Sec", style=th_style),
+        html.Th("Length", style=th_style),
+        html.Th("Land Use", style=th_style),
+        html.Th("Activity", style=th_style),
+        html.Th("Facilities Observed", style=th_style),
+        html.Th("Pedestrians", style=th_style),
+        html.Th("NMT", style=th_style),
+        html.Th("Vehicles", style=th_style),
+        html.Th("Concern", style=th_style),
+    ]))
+
+    rows = []
+    for s in sections:
+        eq = s["equity"]
+        concern = eq.get("equity_concern", "unknown")
+        row_bg = concern_bg.get(concern, "transparent")
+
+        # Facilities
+        facs = eq.get("facilities_seen", [])
+        facs_str = ", ".join(f.replace("_", " ").title() for f in facs if f) if facs else "\u2014"
+
+        # NMT
+        footpath = eq.get("nmt_footpath", "unknown")
+        nmt_display = footpath.title()
+        if footpath == "none":
+            nmt_display = "None \u26a0"
+
+        # Vehicles — top types
+        vmix = eq.get("vehicle_mix_summary", {})
+        veh_parts = []
+        for vtype in ["boda_bodas", "bicycles", "minibus_taxi", "cars", "trucks"]:
+            level = vmix.get(vtype)
+            if level:
+                veh_parts.append(f"{vtype.replace('_', ' ').title()} ({level})")
+        veh_str = ", ".join(veh_parts[:3]) if veh_parts else "\u2014"
+
+        rows.append(html.Tr([
+            html.Td(str(s["section_index"] + 1), style=td_style),
+            html.Td(f"{s['length_km']:.1f} km", style={**td_style, "fontFamily": "DM Mono"}),
+            html.Td(eq.get("dominant_land_use", "?").replace("_", " ").title(), style=td_style),
+            html.Td(eq.get("activity_level", "?").title(), style=td_style),
+            html.Td(facs_str, style={**td_style, "maxWidth": "140px"}),
+            html.Td(eq.get("pedestrian_presence", "?").title(), style=td_style),
+            html.Td(nmt_display, style=td_style),
+            html.Td(veh_str, style={**td_style, "maxWidth": "160px", "fontSize": "0.7rem"}),
+            html.Td(concern.upper(), style={
+                **td_style,
+                "fontWeight": "bold",
+                "color": concern_colors.get(concern, "#5c5950"),
+            }),
+        ], style={"background": row_bg}))
+
+    table = html.Div([
+        html.Div("CAMERA OBSERVATIONS BY SECTION", style={
+            "fontSize": "0.65rem", "fontFamily": "DM Mono, monospace",
+            "textTransform": "uppercase", "letterSpacing": "0.05em",
+            "color": "#8a8578", "marginBottom": "8px", "fontWeight": "600",
+        }),
+        html.Div(
+            html.Table([header, html.Tbody(rows)], style={
+                "width": "100%", "borderCollapse": "collapse",
+            }),
+            style={"overflowX": "auto"},
+        ),
+    ], style={"marginBottom": "16px"})
+
+    # ── Section C: AI Equity Narrative ─────────────────────────────
+    equity_narrative = video_data.get("equity_narrative", "")
+    if equity_narrative:
+        narrative_panel = html.Div([
+            html.Div("EQUITY IMPACT ASSESSMENT", style={
+                "fontSize": "0.65rem", "fontFamily": "DM Mono, monospace",
+                "textTransform": "uppercase", "letterSpacing": "0.05em",
+                "color": "#3a5a80", "marginBottom": "6px",
+            }),
+            html.P(equity_narrative, style={"fontSize": "0.85rem", "whiteSpace": "pre-line"}),
+        ], style={
+            "borderLeft": "3px solid #3a5a80",
+            "paddingLeft": "12px",
+            "marginTop": "8px",
+        })
+    else:
+        narrative_panel = html.Div()
+
+    return summary_box, table, narrative_panel
+
+
+# --- Step 8: PDF ---
 
 @callback(
     Output("download-pdf", "data"),
@@ -1643,7 +1999,7 @@ def generate_pdf_report(n_clicks, road_data, facilities_data, pop_data,
         return no_update, dbc.Alert(f"Error generating report: {str(e)}", color="danger")
 
 
-# --- Step 7: CSV ---
+# --- Step 8: CSV ---
 
 @callback(
     Output("download-csv", "data"),
@@ -1680,7 +2036,7 @@ def export_csv(n_clicks, cba_results, road_data):
     return dcc.send_data_frame(df.to_csv, f"TARA_Cashflows_{road_name}_{date_str}.csv", index=False)
 
 
-# --- Step 7: Report Preview ---
+# --- Step 8: Report Preview ---
 
 @callback(
     Output("report-summary", "children"),
@@ -1688,7 +2044,7 @@ def export_csv(n_clicks, cba_results, road_data):
     Input("current-step-store", "data"),
 )
 def show_report_summary(cba_results, current_step):
-    if current_step != 7 or not cba_results:
+    if current_step != 8 or not cba_results:
         return html.Div()
 
     from output.report import generate_report_markdown

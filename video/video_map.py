@@ -13,6 +13,110 @@ CONDITION_COLORS = {
 }
 
 
+def aggregate_section_equity(section_frames: list[dict]) -> dict:
+    """Aggregate activity profiles across frames in a section.
+
+    Args:
+        section_frames: list of frame dicts, each with optional activity_profile
+            in their assessment.
+
+    Returns:
+        Dict with aggregated equity indicators for the section.
+    """
+    profiles = [
+        f.get("assessment", {}).get("activity_profile", {})
+        for f in section_frames
+        if f.get("assessment", {}).get("activity_profile")
+    ]
+
+    if not profiles:
+        return {
+            "activity_level": "unknown",
+            "dominant_land_use": "unknown",
+            "pedestrian_presence": "unknown",
+            "nmt_footpath": "unknown",
+            "pedestrians_on_carriageway": False,
+            "school_children_observed": False,
+            "vendors_observed": False,
+            "facilities_seen": [],
+            "vehicle_mix_summary": {},
+            "equity_concern": "unknown",
+        }
+
+    # Most common land_use across frames
+    land_uses = [p.get("land_use", "unknown") for p in profiles]
+    dominant_land_use = max(set(land_uses), key=land_uses.count)
+
+    # Highest activity level observed
+    level_order = {"high": 3, "moderate": 2, "low": 1, "none": 0, "unknown": -1}
+    activity_levels = [p.get("activity_level", "unknown") for p in profiles]
+    highest_activity = max(activity_levels, key=lambda x: level_order.get(x, -1))
+
+    # Pedestrian presence — take the highest observed
+    presence_order = {"many": 3, "some": 2, "few": 1, "none": 0}
+    ped_levels = [p.get("people_observed", {}).get("pedestrians", "none") for p in profiles]
+    pedestrian_presence = max(ped_levels, key=lambda x: presence_order.get(x, 0))
+
+    # School children — true if seen in ANY frame
+    school_children = any(
+        p.get("people_observed", {}).get("school_children", False) for p in profiles
+    )
+
+    # Vendors — true if seen in ANY frame
+    vendors = any(
+        p.get("people_observed", {}).get("vendors_roadside", False) for p in profiles
+    )
+
+    # NMT — worst case across frames
+    footpath_values = [p.get("nmt_infrastructure", {}).get("footpath", "none") for p in profiles]
+    footpath_order = {"good": 2, "poor": 1, "none": 0}
+    nmt_footpath = min(footpath_values, key=lambda x: footpath_order.get(x, 0))
+
+    # Pedestrians on carriageway — true if seen in ANY frame
+    peds_on_road = any(
+        p.get("nmt_infrastructure", {}).get("pedestrians_on_carriageway", False) for p in profiles
+    )
+
+    # Collect all unique facilities seen across frames
+    all_facilities: list[str] = []
+    for p in profiles:
+        facs = p.get("facilities_visible", [])
+        if isinstance(facs, list):
+            all_facilities.extend(facs)
+    facilities_seen = sorted(set(f for f in all_facilities if f != "none"))
+
+    # Vehicle mix — highest level per type across frames
+    vehicle_types = ["boda_bodas", "bicycles", "minibus_taxi", "cars", "trucks"]
+    vehicle_summary: dict[str, str] = {}
+    for vtype in vehicle_types:
+        levels = [p.get("vehicles_observed", {}).get(vtype, "none") for p in profiles]
+        highest = max(levels, key=lambda x: presence_order.get(x, 0))
+        if highest != "none":
+            vehicle_summary[vtype] = highest
+
+    # Equity concern flag
+    equity_concern = "low"
+    if pedestrian_presence in ("many", "some") and nmt_footpath == "none":
+        equity_concern = "high"
+    elif school_children or (pedestrian_presence == "some" and nmt_footpath == "poor"):
+        equity_concern = "moderate"
+    elif pedestrian_presence == "many":
+        equity_concern = "moderate"
+
+    return {
+        "activity_level": highest_activity,
+        "dominant_land_use": dominant_land_use,
+        "pedestrian_presence": pedestrian_presence,
+        "nmt_footpath": nmt_footpath,
+        "pedestrians_on_carriageway": peds_on_road,
+        "school_children_observed": school_children,
+        "vendors_observed": vendors,
+        "facilities_seen": facilities_seen,
+        "vehicle_mix_summary": vehicle_summary,
+        "equity_concern": equity_concern,
+    }
+
+
 def build_popup_html(frame: dict) -> str:
     """Build HTML string for a dash-leaflet popup with dashcam thumbnail and stats.
 
@@ -137,11 +241,18 @@ def frames_to_condition_geojson(
         return None
 
     # ------------------------------------------------------------------
-    # 2.  Group frames into sections
-    #     Break when (a) condition_class changes, or
-    #                (b) cumulative section distance > 1.0 km
+    # 2.  Group frames into sections (smoothed)
+    #     Rules:
+    #     - Break on surface_type change (if section >= MIN_SECTION_KM)
+    #     - Break on condition_class change only if SMOOTHING_WINDOW
+    #       consecutive frames agree on the new condition
+    #     - Enforce MIN_SECTION_KM (0.3 km) — no tiny sections
+    #     - Enforce MAX_SECTION_KM (2.0 km) — force break
+    #     - NEVER break on activity_profile changes
     # ------------------------------------------------------------------
-    MAX_SECTION_KM = 1.0  # kilometres
+    MIN_SECTION_KM = 0.5   # minimum section length
+    MAX_SECTION_KM = 2.0   # maximum section length
+    SMOOTHING_WINDOW = 3   # consecutive frames to confirm change
 
     sections: list[list[dict]] = []
     current_section = [geo_frames[0]]
@@ -149,7 +260,7 @@ def frames_to_condition_geojson(
     current_surface = geo_frames[0]["assessment"]["surface_type"]
     section_distance_m = 0.0  # running distance in metres
 
-    for frame in geo_frames[1:]:
+    for i, frame in enumerate(geo_frames[1:], 1):
         condition = frame["assessment"]["condition_class"]
         surface = frame["assessment"]["surface_type"]
 
@@ -157,11 +268,31 @@ def frames_to_condition_geojson(
         prev = current_section[-1]
         dist_m = haversine(prev["lat"], prev["lon"], frame["lat"], frame["lon"])
 
-        condition_changed = (condition != current_condition)
-        surface_changed = (surface != current_surface)
-        distance_exceeded = ((section_distance_m + dist_m) > MAX_SECTION_KM * 1000)
+        current_length_km = (section_distance_m + dist_m) / 1000
+        should_break = False
 
-        if condition_changed or surface_changed or distance_exceeded:
+        # Force break at max length
+        if current_length_km >= MAX_SECTION_KM:
+            should_break = True
+
+        # Break on surface type change (if above min length AND sustained)
+        elif current_length_km >= MIN_SECTION_KM and surface != current_surface:
+            lookahead = geo_frames[i:i + SMOOTHING_WINDOW]
+            if len(lookahead) >= SMOOTHING_WINDOW and all(
+                f["assessment"]["surface_type"] == surface for f in lookahead
+            ):
+                should_break = True
+
+        # Break on sustained condition change (if above min length)
+        elif current_length_km >= MIN_SECTION_KM and condition != current_condition:
+            # Look ahead: do the next SMOOTHING_WINDOW frames agree?
+            lookahead = geo_frames[i:i + SMOOTHING_WINDOW]
+            if len(lookahead) >= SMOOTHING_WINDOW and all(
+                f["assessment"]["condition_class"] == condition for f in lookahead
+            ):
+                should_break = True
+
+        if should_break:
             sections.append(current_section)
             current_section = [frame]
             current_condition = condition
@@ -254,7 +385,26 @@ def frames_to_condition_geojson(
         rep_idx = len(section_frames) // 2
         rep_frame = section_frames[rep_idx]
 
+        # --- Equity aggregation -----------------------------------------------
+        equity = aggregate_section_equity(section_frames)
+
         popup_html = build_popup_html(rep_frame)
+
+        # Add equity info to popup for high/moderate concern sections
+        if equity["equity_concern"] in ("high", "moderate"):
+            equity_color = "#a83a2f" if equity["equity_concern"] == "high" else "#9a6b2f"
+            popup_html = popup_html.replace(
+                '</div>\n</div>',  # before closing tags
+                f'<div style="margin-top:6px;padding:4px 8px;background:{equity_color}15;'
+                f'border-left:3px solid {equity_color};font-size:11px;">'
+                f'<b style="color:{equity_color}">Equity: {equity["equity_concern"].upper()}</b><br>'
+                f'{equity["dominant_land_use"].replace("_", " ").title()} area · '
+                f'Pedestrians: {equity["pedestrian_presence"]}'
+                f'{"  · School children observed" if equity["school_children_observed"] else ""}'
+                f'{"  · No footpath" if equity["nmt_footpath"] == "none" else ""}'
+                f'</div>\n</div>\n</div>',
+                1,  # only first occurrence
+            )
 
         # Notes from representative frame
         notes = rep_frame["assessment"].get("notes", "")
@@ -287,6 +437,8 @@ def frames_to_condition_geojson(
                 "representative_frame_index": rep_frame["frame_index"],
                 "representative_image": rep_image,
                 "popup_html": popup_html,
+                "equity": equity,
+                "equity_concern": equity["equity_concern"],
             },
         }
         features.append(feature)
