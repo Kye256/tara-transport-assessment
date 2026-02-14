@@ -232,10 +232,13 @@ def build_condition_layer(geojson: dict) -> list:
         List of dl.Polyline or dl.CircleMarker components.
     """
     condition_colors = {
+        "very_good": "#1a7a4a",
         "good": "#2d5f4a",
         "fair": "#9a6b2f",
         "poor": "#c4652a",
+        "very_poor": "#a83a2f",
         "bad": "#a83a2f",
+        "impassable": "#6b1a1a",
     }
 
     layers = []

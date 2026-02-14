@@ -1,3 +1,5 @@
+# TODO: This module uses a separate Sonnet-based assessment path for the agent API.
+# Consider migrating to the TMH12/VCI methodology from video/vision_assess.py.
 """
 TARA Dashcam Analysis
 Analyses road condition from dashcam video or images using Claude Vision API.

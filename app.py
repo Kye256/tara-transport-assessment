@@ -444,6 +444,7 @@ def build_step5():
                     size="lg"),
         dcc.Loading(type="default", children=html.Div(id="cba-results-area")),
         html.Hr(),
+        html.Div(id="subcounty-population-panel"),
         html.Div(id="equity-summary-box"),
         html.Div(id="equity-section-table"),
         html.Div(id="equity-narrative-panel"),
@@ -513,6 +514,7 @@ app.layout = html.Div([
     dcc.Store(id="map-bounds-store", data=None),
     dcc.Store(id="video-condition-store", data=None),
     dcc.Store(id="video-success-store", data=None),
+    dcc.Store(id="subcounty-population-store", data=None),
 
     # Header
     html.Div([
@@ -544,6 +546,17 @@ app.layout = html.Div([
 
         # Right: Map + Results
         html.Div([
+            dbc.Checklist(
+                id="map-overlay-toggle",
+                options=[{"label": " Population overlay", "value": "subcounty"}],
+                value=["subcounty"],
+                inline=True,
+                style={
+                    "fontFamily": "'DM Mono', monospace", "fontSize": "10px",
+                    "color": "#8a8578", "padding": "2px 8px",
+                    "borderBottom": "1px solid #e8e5de",
+                },
+            ),
             html.Div(
                 dl.Map(
                     id="main-map",
@@ -730,12 +743,13 @@ def toggle_manual_condition(n_clicks, is_open):
     Output("main-map", "center"),
     Output("main-map", "zoom"),
     Output("map-bounds-store", "data"),
+    Output("subcounty-population-store", "data"),
     Input("road-select-dropdown", "value"),
     prevent_initial_call=True,
 )
 def select_road(road_id):
     if not road_id:
-        return (no_update,) * 7
+        return (no_update,) * 8
 
     from skills.road_database import get_road_by_id
     from output.maps import create_road_map
@@ -744,7 +758,7 @@ def select_road(road_id):
     if not road_record:
         return (
             dbc.Alert("Road not found in database.", color="danger"),
-            None, None, no_update, no_update, no_update, no_update,
+            None, None, no_update, no_update, no_update, no_update, None,
         )
 
     # Convert road_database format → road_data format expected by rest of app
@@ -785,6 +799,16 @@ def select_road(road_id):
 
     map_result = create_road_map(road_data, facilities_data)
 
+    # UBOS subcounty population lookup (non-critical)
+    subcounty_store_data = None
+    try:
+        from modules.ubos_population import get_corridor_subcounties, get_population_summary
+        corridor_scs = get_corridor_subcounties(road_data)
+        if corridor_scs:
+            subcounty_store_data = _make_serializable(get_population_summary(corridor_scs))
+    except Exception as e:
+        print(f"UBOS subcounty lookup failed (non-critical): {e}")
+
     # Road info as HTML table
     info_rows = [
         html.Tr([html.Td("Length"), html.Td(f"{road_data['total_length_km']} km")]),
@@ -812,14 +836,27 @@ def select_road(road_id):
         info_table,
     ])
 
+    # Build map children with subcounty overlay if available
+    map_children = map_result["children"]
+    if subcounty_store_data and subcounty_store_data.get("_geojson"):
+        overlay = _build_subcounty_overlay(subcounty_store_data)
+        if overlay:
+            # Insert after TileLayer (index 1) so it renders underneath road
+            if len(map_children) > 1:
+                map_children = list(map_children)
+                map_children.insert(1, overlay)
+            else:
+                map_children = list(map_children) + [overlay]
+
     return (
         result_ui,
         _make_serializable(road_data),
         _make_serializable(facilities_data),
-        map_result["children"],
+        map_children,
         map_result["center"],
         map_result["zoom"],
         map_result.get("bounds"),
+        subcounty_store_data,
     )
 
 
@@ -868,6 +905,190 @@ def _build_segments_from_geometries(road_record: dict) -> list[dict]:
             "length_km": round(length, 3),
         })
     return segments
+
+
+# --- Map Overlay Toggle: Subcounty Population ---
+
+@callback(
+    Output("main-map", "children", allow_duplicate=True),
+    Input("map-overlay-toggle", "value"),
+    State("subcounty-population-store", "data"),
+    State("main-map", "children"),
+    prevent_initial_call=True,
+)
+def toggle_subcounty_overlay(toggle_value, subcounty_data, current_children):
+    """Show/hide subcounty population polygons on the map."""
+    if not current_children:
+        return no_update
+
+    children = list(current_children)
+
+    # Remove existing overlay if present (Dash serializes components as dicts)
+    filtered = []
+    for c in children:
+        is_overlay = False
+        if isinstance(c, dict) and c.get("props", {}).get("id") == "subcounty-overlay":
+            is_overlay = True
+        elif hasattr(c, "id") and c.id == "subcounty-overlay":
+            is_overlay = True
+        if not is_overlay:
+            filtered.append(c)
+    children = filtered
+
+    if "subcounty" not in (toggle_value or []):
+        return children
+
+    overlay = _build_subcounty_overlay(subcounty_data)
+    if not overlay:
+        return children
+
+    # Insert after TileLayer (index 1) to render underneath road layers
+    if len(children) > 1:
+        children.insert(1, overlay)
+    else:
+        children.append(overlay)
+
+    return children
+
+
+def _geojson_to_leaflet_positions(geom: dict) -> list:
+    """Convert GeoJSON geometry to dash-leaflet positions [[lat, lon], ...]."""
+    positions_list = []
+    geom_type = geom.get("type", "")
+    coords = geom.get("coordinates", [])
+
+    if geom_type == "Polygon":
+        # coords = [ring, ...] where ring = [[lon, lat], ...]
+        for ring in coords:
+            positions_list.append([[lat, lon] for lon, lat, *_ in ring])
+    elif geom_type == "MultiPolygon":
+        # coords = [polygon, ...] where polygon = [ring, ...]
+        for polygon in coords:
+            for ring in polygon:
+                positions_list.append([[lat, lon] for lon, lat, *_ in ring])
+
+    return positions_list
+
+
+def _build_subcounty_overlay(subcounty_data: dict):
+    """Build a dl.LayerGroup with subcounty population polygons.
+
+    Args:
+        subcounty_data: Population summary dict with _geojson key.
+
+    Returns:
+        dl.LayerGroup or None if no features.
+    """
+    if not subcounty_data or not subcounty_data.get("_geojson"):
+        return None
+
+    density_styles = {
+        "very_high": {"fillColor": "#2d5f4a", "fillOpacity": 0.35},
+        "high":      {"fillColor": "#4a8c6f", "fillOpacity": 0.30},
+        "moderate":  {"fillColor": "#8ab5a0", "fillOpacity": 0.25},
+        "low":       {"fillColor": "#c8ddd1", "fillOpacity": 0.20},
+    }
+
+    polygons = []
+    for feat in subcounty_data["_geojson"].get("features", []):
+        props = feat.get("properties", {})
+        geom = feat.get("geometry", {})
+        density_cat = props.get("density_category", "low")
+        style = density_styles.get(density_cat, density_styles["low"])
+
+        name = props.get("name", "?")
+        pop = props.get("pop_projected", 0)
+        density = props.get("density_per_sq_km", 0)
+        tooltip = f"{name}: Pop. {pop:,} | {density:,.0f}/km\u00b2"
+
+        poly_positions = _geojson_to_leaflet_positions(geom)
+        for positions in poly_positions:
+            polygons.append(
+                dl.Polygon(
+                    positions=positions,
+                    color="#2d5f4a",
+                    weight=1,
+                    opacity=0.5,
+                    fillColor=style["fillColor"],
+                    fillOpacity=style["fillOpacity"],
+                    children=[dl.Tooltip(tooltip)],
+                )
+            )
+
+    if not polygons:
+        return None
+
+    return dl.LayerGroup(id="subcounty-overlay", children=polygons)
+
+
+# --- Population Panel: Subcounty Summary Table ---
+
+@callback(
+    Output("subcounty-population-panel", "children"),
+    Input("current-step-store", "data"),
+    State("subcounty-population-store", "data"),
+    prevent_initial_call=True,
+)
+def update_population_panel(current_step, subcounty_data):
+    """Render the subcounty population summary table on Step 5."""
+    if current_step != 5:
+        return html.Div()
+    if not subcounty_data or not subcounty_data.get("subcounties"):
+        return html.Div()
+
+    label_style = {
+        "fontFamily": "'DM Mono', monospace", "fontSize": "9px",
+        "textTransform": "uppercase", "letterSpacing": "0.1em",
+        "color": "#8a8578", "marginBottom": "6px",
+    }
+    th_style = {
+        "fontFamily": "'DM Mono', monospace", "fontSize": "11px",
+        "color": "#8a8578", "fontWeight": "500", "padding": "4px 8px",
+        "borderBottom": "1px solid #ddd9d1", "textAlign": "left",
+    }
+    td_style = {
+        "fontFamily": "'DM Mono', monospace", "fontSize": "11px",
+        "color": "#2c2a26", "padding": "3px 8px",
+        "borderBottom": "1px solid #eae7e1",
+    }
+    td_num_style = {**td_style, "textAlign": "right"}
+
+    total_pop = subcounty_data.get("total_population", 0)
+    total_hh = subcounty_data.get("total_households", 0)
+    num_sc = subcounty_data.get("num_subcounties", 0)
+    year = subcounty_data.get("projection_year", 2026)
+
+    rows = []
+    for sc in subcounty_data.get("subcounties", []):
+        rows.append(html.Tr([
+            html.Td(sc["name"], style=td_style),
+            html.Td(f"{sc['pop_projected']:,}", style=td_num_style),
+            html.Td(f"{sc['households']:,}", style=td_num_style),
+            html.Td(f"{sc['density_per_sq_km']:,.0f}", style=td_num_style),
+        ]))
+
+    return html.Div([
+        html.Div(f"CORRIDOR POPULATION \u00b7 UBOS 2014 CENSUS ({year} EST.)", style=label_style),
+        html.Div(
+            f"Total population: {total_pop:,} \u00b7 Households: {total_hh:,} \u00b7 {num_sc} subcounties",
+            style={"fontFamily": "'DM Mono', monospace", "fontSize": "11px",
+                   "color": "#5c5950", "marginBottom": "8px"},
+        ),
+        html.Table([
+            html.Thead(html.Tr([
+                html.Th("Subcounty", style=th_style),
+                html.Th("Population", style={**th_style, "textAlign": "right"}),
+                html.Th("Households", style={**th_style, "textAlign": "right"}),
+                html.Th("Density/km\u00b2", style={**th_style, "textAlign": "right"}),
+            ])),
+            html.Tbody(rows),
+        ], style={"width": "100%", "borderCollapse": "collapse", "marginBottom": "4px"}),
+        html.Div(
+            "Source: Uganda Bureau of Statistics, 2014 National Population Census",
+            style={"fontFamily": "'DM Mono', monospace", "fontSize": "8px",
+                   "color": "#8a8578", "marginTop": "4px", "marginBottom": "12px"},
+        ),
+    ], style={"marginBottom": "16px"})
 
 
 # --- Step 2: Pre-fill surface from OSM ---
@@ -1148,10 +1369,12 @@ def confirm_reanalyse(submit_n_clicks):
     State("frame-interval-dropdown", "value"),
     State("road-data-store", "data"),
     State("main-map", "children"),
+    State("subcounty-population-store", "data"),
     prevent_initial_call=True,
 )
 def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_input,
-                       frame_interval_meters, road_data, current_map_children):
+                       frame_interval_meters, road_data, current_map_children,
+                       subcounty_data):
     """Run the full video + GPS analysis pipeline using local file paths."""
     trigger = ctx.triggered_id
     if trigger == "force-reanalyse-store" and not force_reanalyse:
@@ -1207,6 +1430,7 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
             frame_interval_meters=frame_interval_meters or 25,
             use_mock=False,
             use_cache=use_cache,
+            subcounty_data=subcounty_data,
         )
 
         # Handle pipeline error responses (size guards, memory errors, etc.)
@@ -1290,6 +1514,7 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
             "defects": distress_list,
             "drainage_condition": "unknown",
             "sections": result.get("interventions", {}).get("sections", []),
+            "vci_methodology": "TMH12/ASTM_D6433",
         }
 
         # --- Build map layer ---
@@ -1306,10 +1531,12 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
         legend_html = html.Div([
             html.Div("Condition:", style={"fontWeight": "bold", "fontSize": "0.75rem"}),
             html.Div([
+                html.Span("\u25cf", style={"color": "#1a7a4a"}), " V.Good ",
                 html.Span("\u25cf", style={"color": "#2d5f4a"}), " Good ",
                 html.Span("\u25cf", style={"color": "#9a6b2f"}), " Fair ",
                 html.Span("\u25cf", style={"color": "#c4652a"}), " Poor ",
-                html.Span("\u25cf", style={"color": "#a83a2f"}), " Bad",
+                html.Span("\u25cf", style={"color": "#a83a2f"}), " V.Poor ",
+                html.Span("\u25cf", style={"color": "#6b1a1a"}), " Impass.",
             ], style={"fontSize": "0.7rem"}),
         ], style={
             "position": "absolute", "bottom": "10px", "right": "10px",
@@ -1727,7 +1954,7 @@ def run_cba_callback(
         waterfall = create_waterfall_chart(cba_results)
         cashflow = create_cashflow_chart(cba_results)
         traffic = create_traffic_growth_chart(cba_results)
-        charts_ui = html.Div([
+        chart_children = [
             html.Div(
                 dcc.Graph(figure=waterfall, config={"displayModeBar": False}),
                 className="chart-container",
@@ -1740,7 +1967,58 @@ def run_cba_callback(
                 dcc.Graph(figure=traffic, config={"displayModeBar": False}),
                 className="chart-container",
             ),
-        ])
+        ]
+
+        # Deterioration chart — IRI forecast alongside CBA charts
+        try:
+            from engine.deterioration import (
+                create_deterioration_chart, get_deterioration_summary,
+                generate_narrative as det_narrative_fn, SURFACE_MAP,
+            )
+
+            # Extract deterioration inputs from existing data
+            avg_iri = 11.0  # default for unknown
+            raw_surface = "asphalt"
+            if condition_data:
+                avg_iri = condition_data.get("iri") or avg_iri
+                raw_surface = condition_data.get("surface_type", raw_surface)
+            mapped_surface = SURFACE_MAP.get(str(raw_surface).lower(), "paved_fair")
+            total_adt = float(adt)
+            road_name = road_data.get("name", "Road") if road_data else "Road"
+
+            det_fig = create_deterioration_chart(
+                iri_current=float(avg_iri),
+                surface_type=mapped_surface,
+                adt=total_adt,
+                analysis_period=int(analysis_period or 20),
+                construction_years=int(construction_years or 3),
+                base_year=int(base_year or 2026),
+                road_name=road_name,
+            )
+            chart_children.append(
+                html.Div(
+                    dcc.Graph(figure=det_fig, config={"displayModeBar": False}),
+                    className="chart-container",
+                )
+            )
+
+            # Store deterioration summary in CBA results for AI narrative + report
+            det_summary = get_deterioration_summary(
+                iri_current=float(avg_iri),
+                surface_type=mapped_surface,
+                adt=total_adt,
+                analysis_period=int(analysis_period or 20),
+                construction_years=int(construction_years or 3),
+                road_name=road_name,
+                road_length_km=road_length,
+            )
+            det_text = det_narrative_fn(det_summary)
+            cba_results["deterioration_summary"] = det_summary
+            cba_results["deterioration_narrative"] = det_text
+        except Exception:
+            pass
+
+        charts_ui = html.Div(chart_children)
     except Exception:
         pass
 
@@ -1940,6 +2218,9 @@ def ai_interpretation(n_clicks, cba_results, sensitivity_results, road_data):
                 f"Sensitivity: most sensitive to {sm.get('most_sensitive_variable', 'unknown')}. "
                 f"Risk: {sm.get('risk_assessment', 'unknown')}. "
             )
+        det_narrative = cba_results.get("deterioration_narrative")
+        if det_narrative:
+            prompt += f"Deterioration forecast: {det_narrative} "
         prompt += "Be specific and actionable. Write for a decision-maker."
 
         agent = create_agent()

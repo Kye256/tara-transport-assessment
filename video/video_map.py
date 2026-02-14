@@ -6,10 +6,13 @@ from datetime import datetime, timedelta, timezone
 from video.gps_utils import haversine, get_trackpoints_between
 
 CONDITION_COLORS = {
+    "very_good": "#1a7a4a",
     "good": "#2d5f4a",
     "fair": "#9a6b2f",
     "poor": "#c4652a",
-    "bad": "#a83a2f",
+    "very_poor": "#a83a2f",
+    "bad": "#a83a2f",       # backward compat alias
+    "impassable": "#6b1a1a",
 }
 
 
@@ -129,7 +132,8 @@ def build_popup_html(frame: dict) -> str:
     assessment = frame.get("assessment", {})
     condition = assessment.get("condition_class", "fair")
     color = CONDITION_COLORS.get(condition, "#9a6b2f")
-    iri = assessment.get("iri_estimate", "?")
+    iri = assessment.get("iri_mid", assessment.get("iri_estimate", "?"))
+    vci = assessment.get("vci")
     surface = assessment.get("surface_type", "?")
     distress = assessment.get("distress_types", [])
     distress_str = ", ".join(d.replace("_", " ") for d in distress if d != "none") or "none"
@@ -146,13 +150,14 @@ def build_popup_html(frame: dict) -> str:
             f'style="width:300px; border-radius:3px;" />'
         )
 
+    vci_str = f" (VCI: {vci}/100)" if vci is not None else ""
     parts.append(
         f'<div style="margin-top:8px;">'
         f'<span style="background:{color}; color:white; padding:2px 8px; '
         f'border-radius:2px; font-size:11px; font-weight:600;">'
         f'{condition.upper()}</span>'
         f'<span style="color:#5c5950; font-size:12px; margin-left:8px;">'
-        f'IRI ~{iri} m/km</span>'
+        f'IRI ~{iri} m/km{vci_str}</span>'
         f'</div>'
     )
 
@@ -369,11 +374,25 @@ def frames_to_condition_geojson(
             coords.append([lon + 0.00005, lat + 0.00005])
 
         # --- Section-level statistics ------------------------------------
-        iris = [f["assessment"]["iri_estimate"] for f in section_frames]
+        iris = [f["assessment"].get("iri_mid", f["assessment"].get("iri_estimate", 8.0)) for f in section_frames]
         avg_iri = round(sum(iris) / len(iris), 1) if iris else 0
 
         surfaces = [f["assessment"]["surface_type"] for f in section_frames]
         surface_type = Counter(surfaces).most_common(1)[0][0] if surfaces else "unknown"
+
+        # VCI-based section aggregation (median, robust to outlier frames)
+        section_vci = None
+        iri_range = None
+        vcis = [f["assessment"].get("vci") for f in section_frames if f["assessment"].get("vci") is not None]
+        if vcis:
+            section_vci = sorted(vcis)[len(vcis) // 2]
+            from video.vci import vci_to_iri, classify_condition, condition_to_ui_class
+            _, section_iri_mid, _ = vci_to_iri(section_vci, surface_type)
+            iri_low_s, _, iri_high_s = vci_to_iri(section_vci, surface_type)
+            avg_iri = section_iri_mid
+            condition = condition_to_ui_class(classify_condition(section_iri_mid))
+            color = CONDITION_COLORS.get(condition, "#9a6b2f")
+            iri_range = f"{iri_low_s}-{iri_high_s}"
 
         all_distress: set[str] = set()
         for f in section_frames:
@@ -439,6 +458,8 @@ def frames_to_condition_geojson(
                 "popup_html": popup_html,
                 "equity": equity,
                 "equity_concern": equity["equity_concern"],
+                "vci": section_vci,
+                "iri_range": iri_range,
             },
         }
         features.append(feature)

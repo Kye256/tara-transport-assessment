@@ -111,6 +111,7 @@ def run_pipeline(
     progress_callback=None,
     skip_size_guards: bool = False,
     use_cache: bool = True,
+    subcounty_data: dict = None,
 ) -> dict:
     """Run the full dashcam analysis pipeline.
 
@@ -163,6 +164,21 @@ def run_pipeline(
                 if "equity_narrative" not in cached_result:
                     section_features = cached_result.get("geojson", {}).get("features", [])
                     cached_result["equity_narrative"] = generate_equity_narrative_mock(section_features)
+                # Re-generate equity narrative with subcounty data if available
+                if subcounty_data and subcounty_data.get("subcounties"):
+                    section_features = cached_result.get("geojson", {}).get("features", [])
+                    if section_features:
+                        try:
+                            import anthropic
+                            _api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+                            if _api_key:
+                                client = anthropic.Anthropic(api_key=_api_key)
+                                cached_result["equity_narrative"] = generate_equity_narrative(
+                                    section_features, client, subcounty_data=subcounty_data,
+                                )
+                                progress(7, "Equity narrative enriched with subcounty data")
+                        except Exception as e:
+                            print(f"  Subcounty narrative enrichment failed (using cached): {e}")
                 sections_count = cached_result.get("metadata", {}).get("sections_count", "?")
                 progress(7, f"Loaded from cache — {sections_count} sections")
                 return cached_result
@@ -381,7 +397,9 @@ def run_pipeline(
             if use_mock:
                 equity_narrative = generate_equity_narrative_mock(section_features)
             else:
-                equity_narrative = generate_equity_narrative(section_features, anthropic_client)
+                equity_narrative = generate_equity_narrative(
+                    section_features, anthropic_client, subcounty_data=subcounty_data,
+                )
             print("  \u2192 Equity narrative generated")
         except Exception as e:
             print(f"  Equity narrative generation failed: {e}")

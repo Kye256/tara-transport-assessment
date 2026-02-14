@@ -138,7 +138,7 @@ def extract_frames(
 
     # Clear and recreate output dir
     if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
+        shutil.rmtree(output_dir, ignore_errors=True)
     os.makedirs(output_dir, exist_ok=True)
 
     # Single file mode

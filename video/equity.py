@@ -10,6 +10,7 @@ def generate_equity_narrative(
     sections_data: list[dict[str, Any]],
     anthropic_client,
     model: str = "claude-sonnet-4-5-20250929",
+    subcounty_data: dict | None = None,
 ) -> str:
     """Generate an equity impact narrative from section-level camera observations.
 
@@ -18,6 +19,9 @@ def generate_equity_narrative(
             from aggregate_section_equity.
         anthropic_client: Anthropic client instance.
         model: Claude model to use for generation.
+        subcounty_data: optional UBOS population summary dict from
+            get_population_summary(). If provided, enriches the prompt
+            with subcounty names and populations.
 
     Returns:
         Narrative string for the equity panel.
@@ -64,6 +68,25 @@ Write in professional but accessible language suitable for a road appraisal repo
 
 CAMERA OBSERVATIONS BY SECTION:
 {sections_json}"""
+
+    # Enrich prompt with UBOS subcounty population data if available
+    if subcounty_data and subcounty_data.get("subcounties"):
+        sc_lines = []
+        for sc in subcounty_data["subcounties"]:
+            sc_lines.append(
+                f"- {sc['name']}: population {sc['pop_projected']:,}, "
+                f"{sc['density_per_sq_km']:,.0f} people/km\u00b2"
+            )
+        year = subcounty_data.get("projection_year", 2026)
+        total = subcounty_data.get("total_population", 0)
+        prompt += f"""
+
+SUBCOUNTY POPULATION DATA (UBOS {year} projection):
+Total corridor population: {total:,}
+{chr(10).join(sc_lines)}
+
+Use this population data to quantify WHO benefits from this road.
+Reference specific subcounty names and populations."""
 
     try:
         response = anthropic_client.messages.create(

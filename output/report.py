@@ -24,6 +24,7 @@ def generate_report_markdown(
     sensitivity_results: Optional[dict] = None,
     equity_results: Optional[dict] = None,
     condition_data: Optional[dict] = None,
+    deterioration_summary: Optional[dict] = None,
 ) -> str:
     """
     Generate a complete markdown appraisal report.
@@ -68,6 +69,12 @@ def generate_report_markdown(
     # 5. Economic Analysis
     sections.append(_section_economic_analysis(cba_results))
 
+    # 5b. Deterioration Forecast
+    det_data = deterioration_summary or (cba_results.get("deterioration_summary") if cba_results else None)
+    det_narr = cba_results.get("deterioration_narrative") if cba_results else None
+    if det_data:
+        sections.append(_section_deterioration(det_data, det_narr))
+
     # 6. Sensitivity Analysis
     sections.append(_section_sensitivity_analysis(sensitivity_results))
 
@@ -100,6 +107,7 @@ def generate_report_pdf(
     sensitivity_results: Optional[dict] = None,
     equity_results: Optional[dict] = None,
     condition_data: Optional[dict] = None,
+    deterioration_summary: Optional[dict] = None,
 ) -> bytes:
     """
     Generate a PDF appraisal report.
@@ -162,6 +170,14 @@ def generate_report_pdf(
 
     # Charts
     _pdf_embed_charts(pdf, cba_results, sensitivity_results)
+
+    # Deterioration Forecast
+    det_data = deterioration_summary or (cba_results.get("deterioration_summary") if cba_results else None)
+    det_narr = cba_results.get("deterioration_narrative") if cba_results else None
+    if det_data:
+        pdf.add_page()
+        _pdf_section_header(pdf, "5b. Deterioration Forecast")
+        _pdf_deterioration(pdf, det_data, det_narr, cba_results)
 
     # Sensitivity Analysis
     pdf.add_page()
@@ -367,6 +383,29 @@ def _section_economic_analysis(cba_results) -> str:
     lines.append(f"**PV of Benefits:** ${cba_results.get('pv_benefits', 0):,.0f}")
     lines.append(f"**PV of Costs:** ${cba_results.get('pv_costs', 0):,.0f}")
     lines.append(f"**Economic Construction Cost:** ${cba_results.get('economic_construction_cost', 0):,.0f}")
+
+    return "\n".join(lines)
+
+
+def _section_deterioration(det_summary: dict, det_narrative: Optional[str] = None) -> str:
+    lines = ["## 5b. Deterioration Forecast", ""]
+
+    lines.append("| Parameter | Value |")
+    lines.append("|-----------|-------|")
+    lines.append(f"| Current IRI | {det_summary.get('iri_current', 'N/A')} m/km |")
+    lines.append(f"| Do-Nothing IRI (end) | {det_summary.get('iri_do_nothing_end', 'N/A')} m/km |")
+    lines.append(f"| With-Project IRI (end) | {det_summary.get('iri_with_project_end', 'N/A')} m/km |")
+    lines.append(f"| IRI Saving | {det_summary.get('iri_saving_end', 'N/A')} m/km |")
+    lines.append(f"| Average IRI Benefit | {det_summary.get('avg_iri_saving', 'N/A')} m/km |")
+    years_poor = det_summary.get("years_until_poor")
+    if years_poor is not None:
+        lines.append(f"| Years Until Poor (IRI 10) | {years_poor} |")
+    lines.append(f"| Deterioration Rate (k) | {det_summary.get('deterioration_rate_k', 'N/A')} |")
+    lines.append(f"| Post-Construction IRI | {det_summary.get('post_construction_iri', 'N/A')} m/km |")
+
+    if det_narrative:
+        lines.append("")
+        lines.append(det_narrative)
 
     return "\n".join(lines)
 
@@ -722,6 +761,51 @@ def _pdf_embed_charts(pdf, cba_results, sensitivity_results):
                 # kaleido not available or chart export failed - skip chart
                 continue
     except ImportError:
+        pass
+
+
+def _pdf_deterioration(pdf, det_summary: dict, det_narrative: Optional[str] = None,
+                       cba_results: Optional[dict] = None):
+    widths = [55, 50]
+    _pdf_table_row(pdf, ["Parameter", "Value"], widths, bold=True)
+    _pdf_table_row(pdf, ["Current IRI", f"{det_summary.get('iri_current', 'N/A')} m/km"], widths)
+    _pdf_table_row(pdf, ["Do-Nothing IRI (end)", f"{det_summary.get('iri_do_nothing_end', 'N/A')} m/km"], widths)
+    _pdf_table_row(pdf, ["With-Project IRI (end)", f"{det_summary.get('iri_with_project_end', 'N/A')} m/km"], widths)
+    _pdf_table_row(pdf, ["IRI Saving", f"{det_summary.get('iri_saving_end', 'N/A')} m/km"], widths)
+    _pdf_table_row(pdf, ["Avg IRI Benefit", f"{det_summary.get('avg_iri_saving', 'N/A')} m/km"], widths)
+    years_poor = det_summary.get("years_until_poor")
+    if years_poor is not None:
+        _pdf_table_row(pdf, ["Years Until Poor", str(years_poor)], widths)
+    _pdf_table_row(pdf, ["Post-Construction IRI", f"{det_summary.get('post_construction_iri', 'N/A')} m/km"], widths)
+    pdf.cell(0, 5, "", ln=True)
+
+    if det_narrative:
+        _pdf_paragraph(pdf, det_narrative)
+
+    # Embed deterioration chart if kaleido available
+    try:
+        import tempfile
+        import os
+        from engine.deterioration import create_deterioration_chart, SURFACE_MAP
+
+        iri_current = det_summary.get("iri_current", 11.0)
+        surface_type = det_summary.get("surface_type", "paved_fair")
+        adt = 1000
+        if cba_results and "traffic_forecast" in cba_results:
+            adt = cba_results["traffic_forecast"].get("base_adt", 1000)
+        fig = create_deterioration_chart(
+            iri_current=iri_current,
+            surface_type=surface_type,
+            adt=adt,
+            analysis_period=det_summary.get("analysis_period", 20),
+            construction_years=det_summary.get("construction_years", 3),
+            road_name=det_summary.get("road_name", "Road"),
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            fig.write_image(tmp.name, width=800, height=350, scale=2)
+            pdf.image(tmp.name, x=10, w=190)
+            os.unlink(tmp.name)
+    except Exception:
         pass
 
 
