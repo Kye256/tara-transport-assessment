@@ -63,20 +63,29 @@ server.config["MAX_CONTENT_LENGTH"] = 3 * 1024 * 1024 * 1024  # 3 GB
 
 STEP_LABELS = [
     "Road",
-    "Analyse",
+    "Video",
     "Traffic",
     "Costs",
     "Results",
-    "Sensitivity",
+    "Risk",
     "Report",
+]
+STEP_TOOLTIPS = [
+    "Select Road",
+    "Video Analysis",
+    "Traffic Data",
+    "Project Costs",
+    "Economic Results",
+    "Risk Analysis",
+    "Final Report",
 ]
 
 # Default Uganda traffic split
 DEFAULT_SPLIT = {"Cars": 0.55, "Buses_LGV": 0.25, "HGV": 0.15, "Semi_Trailers": 0.05}
 DEFAULT_ADT = 3000
 
-# CartoDB Positron tile URL
-TILE_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+# CartoDB Voyager tile URL (more vivid than Positron)
+TILE_URL = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
 TILE_ATTR = '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
 
 
@@ -115,21 +124,28 @@ def _make_serializable(obj):
 # ============================================================
 
 def make_step_indicator(active_step: int = 1) -> html.Div:
-    """Build a segmented step bar (1-7)."""
-    segments = []
+    """Build a step bar with numbered circles and short labels (1-7)."""
+    items = []
     for i, label in enumerate(STEP_LABELS, 1):
         if i < active_step:
-            cls = "tara-step-segment completed"
+            icon_cls = "step-icon completed"
+            item_cls = "step-item completed"
         elif i == active_step:
-            cls = "tara-step-segment active"
+            icon_cls = "step-icon active"
+            item_cls = "step-item active"
         else:
-            cls = "tara-step-segment"
+            icon_cls = "step-icon future"
+            item_cls = "step-item"
 
-        segments.append(
-            html.Div(f"{i}. {label}", className=cls)
+        tooltip = STEP_TOOLTIPS[i - 1] if i <= len(STEP_TOOLTIPS) else label
+        items.append(
+            html.Div([
+                html.Div(str(i), className=icon_cls),
+                html.Div(label, className="step-label"),
+            ], className=item_cls, title=tooltip)
         )
 
-    return html.Div(segments, className="tara-step-bar")
+    return html.Div(items, className="tara-step-bar")
 
 
 # ============================================================
@@ -143,25 +159,62 @@ def _build_road_dropdown_options() -> list[dict]:
 
 
 def build_step1():
-    return dbc.Card(dbc.CardBody([
-        html.H5("Select Road", className="tara-heading"),
-        html.P("Choose a road from the Uganda UNRA network to begin your appraisal.", className="text-muted"),
-        dcc.Dropdown(
-            id="road-select-dropdown",
-            options=_build_road_dropdown_options(),
-            placeholder="Type to search roads...",
-            searchable=True,
-            className="mb-3",
-        ),
-        dcc.Loading(type="circle", children=html.Div(id="road-search-result")),
-        html.Div(
-            dbc.Button("Begin Analysis \u2192", id="begin-analysis-btn",
-                       className="tara-btn-amber mt-3", size="lg",
-                       style={"width": "100%"}),
-            id="begin-analysis-wrapper",
-            style={"display": "none"},
-        ),
-    ]), className="mb-3")
+    return html.Div([
+        # Tagline
+        html.Div([
+            html.Div("Drive any road.", className="tara-tagline"),
+            html.Div("Get a complete investment appraisal.", className="tara-tagline"),
+        ], style={"marginBottom": "0"}),
+        # Feature icons
+        html.Div([
+            html.Div([
+                html.Div("\U0001f3a5", className="feature-circle"),
+                html.Div("Video Analysis", className="feature-label"),
+                html.Div("AI assesses every frame", className="feature-desc"),
+            ], className="feature-item"),
+            html.Div([
+                html.Div("\U0001f4ca", className="feature-circle"),
+                html.Div("Economic Returns", className="feature-label"),
+                html.Div("NPV, BCR, EIRR, FYRR", className="feature-desc"),
+            ], className="feature-item"),
+            html.Div([
+                html.Div("\U0001f465", className="feature-circle"),
+                html.Div("Equity Impact", className="feature-label"),
+                html.Div("People-centred appraisal", className="feature-desc"),
+            ], className="feature-item"),
+        ], className="feature-row"),
+        # Road selector
+        html.Div([
+            dbc.Label("SELECT A ROAD"),
+            dcc.Dropdown(
+                id="road-select-dropdown",
+                options=_build_road_dropdown_options(),
+                placeholder="Type to search roads...",
+                searchable=True,
+                className="mb-2",
+            ),
+            dcc.Loading(type="circle", children=html.Div(id="road-search-result")),
+            html.Div(
+                dbc.Button("Begin Analysis \u2192", id="begin-analysis-btn",
+                           className="tara-btn-amber mt-3", size="lg",
+                           style={"width": "100%"}),
+                id="begin-analysis-wrapper",
+                style={"display": "none"},
+            ),
+        ]),
+        # Or: dataset entry point
+        html.Div("\u2014 or \u2014", style={"textAlign": "center", "color": "#8a8578",
+            "fontSize": "12px", "margin": "16px 0"}),
+        html.Div([
+            html.Div("Start from dashcam footage", style={"fontSize": "13px",
+                "color": "#5c5950", "marginBottom": "8px"}),
+            dcc.Dropdown(
+                id="landing-dataset-dropdown",
+                options=[{"label": d["label"], "value": d["value"]} for d in _DATASETS],
+                placeholder="Select a video dataset...",
+            ),
+        ]),
+    ])
 
 
 def build_step2():
@@ -197,24 +250,9 @@ def build_step2():
                 html.Small("~5 min for a typical survey", className="tara-helper-text d-block mt-1"),
             ], md=4),
         ], className="mb-2"),
-        dbc.Row([
-            dbc.Col([
-                dbc.Input(
-                    id="video-path-input",
-                    placeholder="Video folder or file path",
-                    size="sm",
-                    type="text",
-                ),
-            ], md=6),
-            dbc.Col([
-                dbc.Input(
-                    id="gpx-path-input",
-                    placeholder="GPX file or folder path",
-                    size="sm",
-                    type="text",
-                ),
-            ], md=6),
-        ], className="mb-2"),
+        # Hidden path inputs (populated by preset dropdown, read by callbacks)
+        dbc.Input(id="video-path-input", type="hidden"),
+        dbc.Input(id="gpx-path-input", type="hidden"),
         # Hidden upload components (preserve IDs for other callbacks)
         dcc.Upload(id="dashcam-video-upload", style={"display": "none"}),
         dcc.Upload(id="gpx-upload", style={"display": "none"}),
@@ -231,6 +269,24 @@ def build_step2():
         ]),
         dcc.Store(id="force-reanalyse-store", data=False),
         html.Div(id="video-pipeline-result"),
+        # Pipeline progress with rotating quotes (minimum version — no polling)
+        html.Div(id="pipeline-progress-container", children=[
+            html.Div([
+                html.Div(className="progress-bar-pulsing"),
+            ], style={
+                "width": "100%", "height": "4px", "background": "#e8e5de",
+                "borderRadius": "2px", "marginBottom": "12px", "overflow": "hidden",
+            }),
+            html.Div("Analysing road condition\u2026", id="pipeline-progress-message", style={
+                "fontFamily": "'DM Mono', monospace", "fontSize": "12px",
+                "color": "#2c2a26", "marginBottom": "12px",
+            }),
+            html.Div(id="pipeline-progress-quote", style={
+                "fontSize": "12px", "color": "#8a8578", "fontStyle": "italic",
+                "lineHeight": "1.5", "borderTop": "1px solid #e8e5de",
+                "paddingTop": "12px", "minHeight": "40px",
+            }),
+        ], style={"display": "none"}),
         html.Hr(),
         # --- Manual Condition Entry (collapsed) ---
         html.Div(
@@ -494,7 +550,7 @@ app.layout = html.Div([
                     children=[dl.TileLayer(url=TILE_URL, attribution=TILE_ATTR)],
                     center=[0.35, 32.58],
                     zoom=10,
-                    style={"height": "45vh", "width": "100%"},
+                    style={"height": "50vh", "width": "100%", "minHeight": "300px"},
                 ),
                 className="tara-map-container",
             ),
@@ -521,23 +577,27 @@ app.clientside_callback(
     prevent_initial_call=True,
 )
 
-# Clientside Callback: Show "Analysing..." message when video button clicked
+# Clientside Callback: Show progress container with rotating quotes when video button clicked
+app.clientside_callback(
+    ClientsideFunction(namespace="tara", function_name="startProgress"),
+    Output("run-video-btn", "className"),
+    Input("run-video-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+# Clientside Callback: Hide progress container when pipeline result appears
 app.clientside_callback(
     """
-    function(n_clicks) {
-        if (!n_clicks) return window.dash_clientside.no_update;
-        var el = document.getElementById('video-pipeline-result');
-        if (el) {
-            el.innerHTML = '<div class="tara-ai-block">'
-                + '<span class="tara-typing-dot"></span>'
-                + ' Analysing road condition\u2026 This may take a few minutes.'
-                + '</div>';
+    function(children) {
+        if (children && children !== '') {
+            var tara = window.dash_clientside.tara;
+            if (tara && tara.stopProgress) tara.stopProgress();
         }
         return window.dash_clientside.no_update;
     }
     """,
-    Output("run-video-btn", "className"),
-    Input("run-video-btn", "n_clicks"),
+    Output("pipeline-progress-message", "style"),
+    Input("video-pipeline-result", "children"),
     prevent_initial_call=True,
 )
 
@@ -628,6 +688,21 @@ def begin_analysis_click(n_clicks):
     if n_clicks:
         return 2
     return no_update
+
+
+# --- Step 1: Landing dataset dropdown → advance to step 2 ---
+
+@callback(
+    Output("current-step-store", "data", allow_duplicate=True),
+    Output("video-preset-dropdown", "value"),
+    Input("landing-dataset-dropdown", "value"),
+    prevent_initial_call=True,
+)
+def landing_dataset_select(dataset_value):
+    """When a dataset is selected on landing, advance to Step 2 with it pre-selected."""
+    if dataset_value:
+        return 2, dataset_value
+    return no_update, no_update
 
 
 # --- Step 2: Manual condition collapse toggle ---
@@ -1004,10 +1079,8 @@ def show_cache_status(video_path, gpx_path):
 
     info = _check_cache_status(video_path.strip(), gpx_path.strip())
     if not info["exists"]:
-        return html.Small(
-            "No cached results. Analysis will use API credits.",
-            className="text-muted",
-        ), {"display": "none"}
+        # Show nothing if no cache — user just clicks Run
+        return html.Div(), {"display": "none"}
 
     # Format timestamp
     ts = info["timestamp"]
@@ -1015,32 +1088,20 @@ def show_cache_status(video_path, gpx_path):
         try:
             from datetime import datetime as _dt
             dt = _dt.fromisoformat(ts)
-            ts_display = dt.strftime("%Y-%m-%d %H:%M")
+            ts_display = dt.strftime("%d %b %Y")
         except Exception:
-            ts_display = ts[:16]
+            ts_display = ts[:10]
     else:
         ts_display = "unknown"
 
-    equity_indicator = html.Span(
-        " Equity observations included" if info["has_equity"]
-        else " No equity data \u2014 re-analyse to include",
-        style={"color": "#2d5f4a" if info["has_equity"] else "#9a6b2f"},
-    )
-
     status = html.Div([
         html.Small([
-            html.Strong("Cached result available"),
-            f" (analysed {ts_display})",
-        ], className="d-block", style={"color": "#5c5950"}),
-        html.Small([
-            f"Frames: {info['frames']} assessed | "
-            f"Sections: {info['sections']} | "
-            f"{info['distance_km']:.1f} km",
-        ], className="d-block text-muted", style={"fontFamily": "DM Mono"}),
-        html.Small(equity_indicator, className="d-block"),
+            html.Span("\u2713 ", style={"color": "#2d5f4a", "fontWeight": "bold"}),
+            f"Previous results available \u00b7 Analysed {ts_display}",
+        ], style={"color": "#5c5950"}),
     ], style={
-        "background": "#f0eeea", "border": "1px solid #ddd9d1",
-        "borderRadius": "4px", "padding": "8px 12px", "marginTop": "4px",
+        "background": "#eaf2ee", "border": "1px solid #c8ddd0",
+        "borderRadius": "4px", "padding": "6px 12px", "marginTop": "4px",
     })
 
     return status, {"display": "inline-block"}
@@ -1656,7 +1717,7 @@ def run_cba_callback(
         _metric_card("EIRR (Economic Internal Rate of Return)", f"{s.get('eirr_pct', 'N/A')}%", "success" if eirr_color == "positive" else "warning"),
         _metric_card("BCR (Benefit-Cost Ratio)", f"{cba_results.get('bcr', 0):.2f}", "success" if bcr_color == "positive" else "danger"),
         _metric_card("FYRR (First Year Rate of Return)", f"{s.get('fyrr_pct', 'N/A')}%", "info"),
-    ], className="tara-metric-row")
+    ], className="metric-cards-row")
 
     verdict_badge = html.Div(verdict_text, className=verdict_cls)
 
@@ -1667,28 +1728,43 @@ def run_cba_callback(
         cashflow = create_cashflow_chart(cba_results)
         traffic = create_traffic_growth_chart(cba_results)
         charts_ui = html.Div([
-            dbc.Row([dbc.Col(
-                dcc.Graph(figure=waterfall, config={"displayModeBar": False}), md=12)]),
-            dbc.Row([
-                dbc.Col(dcc.Graph(figure=cashflow, config={"displayModeBar": False}), md=6),
-                dbc.Col(dcc.Graph(figure=traffic, config={"displayModeBar": False}), md=6),
-            ]),
+            html.Div(
+                dcc.Graph(figure=waterfall, config={"displayModeBar": False}),
+                className="chart-container",
+            ),
+            html.Div(
+                dcc.Graph(figure=cashflow, config={"displayModeBar": False}),
+                className="chart-container",
+            ),
+            html.Div(
+                dcc.Graph(figure=traffic, config={"displayModeBar": False}),
+                className="chart-container",
+            ),
         ])
     except Exception:
         pass
 
-    # Equity card
+    # Equity card with needs-based framing
     equity_ui = html.Div()
     if equity_results:
+        eq_score = equity_results.get("overall_score", 0)
+        if eq_score <= 25:
+            eq_label = "Critical \u2014 this corridor urgently needs investment"
+        elif eq_score <= 50:
+            eq_label = "High need \u2014 significant infrastructure gaps"
+        elif eq_score <= 75:
+            eq_label = "Moderate \u2014 some gaps remain"
+        else:
+            eq_label = "Well-served \u2014 meets most user needs"
         equity_ui = dbc.Card(dbc.CardBody([
             html.H6("Equity Assessment"),
             dbc.Progress(
-                value=equity_results.get("overall_score", 0),
-                label=f"{equity_results.get('overall_score', 0)}/100",
-                color="success" if equity_results.get("overall_score", 0) >= 60 else "warning",
+                value=eq_score,
+                label=f"{eq_score}/100",
+                color="success" if eq_score >= 60 else "warning",
                 className="mb-2", style={"height": "24px"},
             ),
-            html.Small(equity_results.get("classification", ""), className="text-muted"),
+            html.Small(eq_label, className="text-muted"),
         ]), className="mb-3")
 
     left_result = html.Div([verdict_badge, metric_row])
@@ -1830,7 +1906,7 @@ def update_sensitivity(cost_chg, traffic_chg, growth_chg,
         _metric_card("Adjusted BCR", f"{new.get('bcr', 0):.2f}",
                      "success" if new.get("bcr", 0) > 1 else "danger"),
         _metric_card("Adjusted EIRR", f"{ns.get('eirr_pct', 'N/A')}%", "info"),
-    ], className="tara-metric-row")
+    ], className="metric-cards-row")
     return comparison, no_update
 
 
@@ -1937,63 +2013,66 @@ def show_equity_step(current_step, video_data, condition_data):
             "equity": equity,
         })
 
-    # ── Section A: Key Findings Summary ────────────────────────────
+    # ── Compute highlights ─────────────────────────────────────────
     total_sections = len(sections)
     high_sections = [s for s in sections if s["equity"].get("equity_concern") == "high"]
-    moderate_sections = [s for s in sections if s["equity"].get("equity_concern") == "moderate"]
-    high_ids = ", ".join(str(s["section_index"] + 1) for s in high_sections)
-    school_sections = [s for s in sections if s["equity"].get("school_children_observed")]
-    school_ids = ", ".join(str(s["section_index"] + 1) for s in school_sections)
     no_footpath = [s for s in sections if s["equity"].get("nmt_footpath") == "none"]
+    trading_centres = [s for s in sections if s["equity"].get("dominant_land_use") == "trading_centre"]
 
-    # Collect all facilities and dominant vehicles
+    # Collect all facilities
     all_facilities = set()
-    all_vehicles = {}
     for s in sections:
         for f in s["equity"].get("facilities_seen", []):
             if f and f != "none":
                 all_facilities.add(f.replace("_", " ").title())
-        for vtype, level in s["equity"].get("vehicle_mix_summary", {}).items():
-            if level in ("many", "some"):
-                vname = vtype.replace("_", " ").title()
-                if vname not in all_vehicles or level == "many":
-                    all_vehicles[vname] = level
+    facility_count = len(all_facilities)
 
-    facilities_str = ", ".join(sorted(all_facilities)) if all_facilities else "None observed"
-    dominant_users = ", ".join(sorted(all_vehicles.keys())) if all_vehicles else "Unknown"
-    # Always include pedestrians if seen
-    ped_sections = [s for s in sections if s["equity"].get("pedestrian_presence") in ("many", "some")]
-    if ped_sections and "Pedestrians" not in dominant_users:
-        dominant_users = "Pedestrians, " + dominant_users
-
-    mono = {"fontFamily": "DM Mono, monospace", "fontSize": "0.8rem"}
-    label_style = {"color": "#8a8578", "minWidth": "200px", "display": "inline-block"}
-
-    def _summary_line(label, value):
-        return html.Div([
-            html.Span(label, style=label_style),
-            html.Span(value, style={"fontWeight": "500"}),
-        ], style={**mono, "marginBottom": "3px"})
-
+    # ── Section A: Header + Highlight Cards ────────────────────────
     summary_box = html.Div([
-        html.Div("EQUITY SUMMARY", style={
-            "fontSize": "0.65rem", "fontFamily": "DM Mono, monospace",
-            "textTransform": "uppercase", "letterSpacing": "0.05em",
-            "color": "#8a8578", "marginBottom": "8px", "fontWeight": "600",
+        html.H3("Who Benefits From This Road", style={
+            "fontFamily": "Libre Franklin, sans-serif", "fontSize": "18px",
+            "color": "#2c2a26", "marginBottom": "4px",
         }),
-        _summary_line("Sections surveyed:", str(total_sections)),
-        _summary_line("High equity concern:",
-                       f"{len(high_sections)} (Sections {high_ids})" if high_sections else "0"),
-        _summary_line("Facilities observed:", facilities_str),
-        _summary_line("Dominant road users:", dominant_users),
-        _summary_line("NMT provision:",
-                       f"{len(no_footpath)} of {total_sections} sections have no footpath"),
-        _summary_line("School children observed:",
-                       f"Sections {school_ids}" if school_sections else "None observed"),
-    ], style={
-        "background": "#f0eeea", "border": "1px solid #ddd9d1",
-        "borderRadius": "4px", "padding": "12px 16px", "marginBottom": "16px",
-    })
+        html.P("Camera-observed equity indicators along the corridor", style={
+            "fontSize": "12px", "color": "#8a8578", "marginBottom": "16px",
+        }),
+        # 2x2 highlight cards
+        html.Div([
+            html.Div([
+                html.Div("\U0001f3e5", className="equity-card-icon"),
+                html.Div(str(facility_count), className="equity-card-stat"),
+                html.Div(
+                    f"Facilities observed: {', '.join(sorted(all_facilities)) if all_facilities else 'none'}"
+                    if facility_count <= 6 else f"Facilities observed along the corridor",
+                    className="equity-card-label",
+                ),
+            ], className="equity-card"),
+            html.Div([
+                html.Div("\U0001f6b6", className="equity-card-icon"),
+                html.Div(f"{len(no_footpath)} of {total_sections}", className="equity-card-stat"),
+                html.Div(
+                    "Sections with no footpath \u2014 pedestrians share the carriageway",
+                    className="equity-card-label",
+                ),
+            ], className="equity-card concern"),
+            html.Div([
+                html.Div("\U0001f3ea", className="equity-card-icon"),
+                html.Div(f"{len(trading_centres)} sections", className="equity-card-stat"),
+                html.Div(
+                    "Active trading centres \u2014 this road is a commercial lifeline",
+                    className="equity-card-label",
+                ),
+            ], className="equity-card"),
+            html.Div([
+                html.Div("\u26a0\ufe0f", className="equity-card-icon"),
+                html.Div(f"{len(high_sections)} sections", className="equity-card-stat"),
+                html.Div(
+                    "Flagged as high equity concern \u2014 vulnerable road users at risk",
+                    className="equity-card-label",
+                ),
+            ], className="equity-card concern"),
+        ], className="equity-highlights"),
+    ])
 
     # ── Section B: Per-Section Equity Table ────────────────────────
     concern_colors = {"high": "#a83a2f", "moderate": "#9a6b2f", "low": "#5c5950"}
@@ -2008,13 +2087,13 @@ def show_equity_step(current_step, video_data, condition_data):
     td_style = {"fontSize": "0.75rem", "padding": "6px 10px", "borderBottom": "1px solid #e8e5de"}
 
     header = html.Thead(html.Tr([
-        html.Th("Sec", style=th_style),
+        html.Th("Section", style=th_style),
         html.Th("Length", style=th_style),
         html.Th("Land Use", style=th_style),
         html.Th("Activity", style=th_style),
         html.Th("Facilities Observed", style=th_style),
         html.Th("Pedestrians", style=th_style),
-        html.Th("NMT", style=th_style),
+        html.Th("Footpath", style=th_style),
         html.Th("Vehicles", style=th_style),
         html.Th("Concern", style=th_style),
     ]))
@@ -2025,17 +2104,14 @@ def show_equity_step(current_step, video_data, condition_data):
         concern = eq.get("equity_concern", "unknown")
         row_bg = concern_bg.get(concern, "transparent")
 
-        # Facilities
         facs = eq.get("facilities_seen", [])
         facs_str = ", ".join(f.replace("_", " ").title() for f in facs if f) if facs else "\u2014"
 
-        # NMT
         footpath = eq.get("nmt_footpath", "unknown")
         nmt_display = footpath.title()
         if footpath == "none":
             nmt_display = "None \u26a0"
 
-        # Vehicles — top types
         vmix = eq.get("vehicle_mix_summary", {})
         veh_parts = []
         for vtype in ["boda_bodas", "bicycles", "minibus_taxi", "cars", "trucks"]:
@@ -2061,11 +2137,16 @@ def show_equity_step(current_step, video_data, condition_data):
         ], style={"background": row_bg}))
 
     table = html.Div([
-        html.Div("CAMERA OBSERVATIONS BY SECTION", style={
-            "fontSize": "0.65rem", "fontFamily": "DM Mono, monospace",
-            "textTransform": "uppercase", "letterSpacing": "0.05em",
-            "color": "#8a8578", "marginBottom": "8px", "fontWeight": "600",
-        }),
+        html.Div([
+            html.Div("CAMERA OBSERVATIONS BY SECTION", style={
+                "fontSize": "0.65rem", "fontFamily": "DM Mono, monospace",
+                "textTransform": "uppercase", "letterSpacing": "0.05em",
+                "color": "#8a8578", "marginBottom": "4px", "fontWeight": "600",
+            }),
+            html.Div("Highlighted sections have high equity concern", style={
+                "fontSize": "11px", "color": "#8a8578", "marginBottom": "8px",
+            }),
+        ]),
         html.Div(
             html.Table([header, html.Tbody(rows)], style={
                 "width": "100%", "borderCollapse": "collapse",
@@ -2076,19 +2157,39 @@ def show_equity_step(current_step, video_data, condition_data):
 
     # ── Section C: AI Equity Narrative ─────────────────────────────
     equity_narrative = video_data.get("equity_narrative", "")
-    if equity_narrative:
+
+    # Needs-based score framing
+    equity_score = video_data.get("equity_score")
+    score_framing = ""
+    if equity_score is not None:
+        try:
+            score_val = float(equity_score)
+            if score_val <= 25:
+                score_framing = "Critical \u2014 this corridor urgently needs investment for its users"
+            elif score_val <= 50:
+                score_framing = "High need \u2014 significant infrastructure gaps affect vulnerable users"
+            elif score_val <= 75:
+                score_framing = "Moderate \u2014 some infrastructure serves users but gaps remain"
+            else:
+                score_framing = "Well-served \u2014 existing infrastructure meets most user needs"
+        except (ValueError, TypeError):
+            pass
+
+    if equity_narrative or score_framing:
+        narrative_parts = []
+        if score_framing:
+            narrative_parts.append(html.Div(score_framing, style={
+                "fontFamily": "Libre Franklin, sans-serif", "fontWeight": "600",
+                "fontSize": "14px", "color": "#2c2a26", "marginBottom": "10px",
+            }))
+        if equity_narrative:
+            narrative_parts.append(html.P(equity_narrative, style={
+                "margin": "0", "fontSize": "13px", "lineHeight": "1.7",
+            }))
         narrative_panel = html.Div([
-            html.Div("EQUITY IMPACT ASSESSMENT", style={
-                "fontSize": "0.65rem", "fontFamily": "DM Mono, monospace",
-                "textTransform": "uppercase", "letterSpacing": "0.05em",
-                "color": "#3a5a80", "marginBottom": "6px",
-            }),
-            html.P(equity_narrative, style={"fontSize": "0.85rem", "whiteSpace": "pre-line"}),
-        ], style={
-            "borderLeft": "3px solid #3a5a80",
-            "paddingLeft": "12px",
-            "marginTop": "8px",
-        })
+            html.Div("EQUITY IMPACT ASSESSMENT", className="equity-narrative-label"),
+            *narrative_parts,
+        ], className="equity-narrative")
     else:
         narrative_panel = html.Div()
 
