@@ -40,6 +40,9 @@ output/*.geojson
 output/*.json
 output/*.md
 
+# Submissions (large video files)
+docs/Submission/
+
 # Temp files
 tmp/
 *.tmp
