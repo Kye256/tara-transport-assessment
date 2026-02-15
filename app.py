@@ -467,6 +467,7 @@ def build_step7():
     return dbc.Card(dbc.CardBody([
         html.H5("Report", className="tara-heading"),
         html.P("Generate and download the appraisal report.", className="text-muted"),
+        html.Div(id="report-preview"),
         html.Div([
             dbc.Button("Generate PDF Report", id="gen-pdf-btn",
                         className="tara-btn-primary me-2"),
@@ -1281,6 +1282,26 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
 
         # --- Bridge to condition-store format ---
         avg_iri = summary.get("average_iri", 11.0)
+
+        # Build report-ready sections from geojson features + interventions
+        intervention_sections = result.get("interventions", {}).get("sections", [])
+        interv_by_idx = {s.get("section_index", i): s for i, s in enumerate(intervention_sections)}
+        report_sections = []
+        for feat in geojson.get("features", []):
+            props = feat.get("properties", {})
+            idx = props.get("section_index", 0)
+            interv_sec = interv_by_idx.get(idx, {})
+            interv = interv_sec.get("intervention", {})
+            report_sections.append({
+                "section_index": idx,
+                "surface_type": props.get("surface_type", "unknown"),
+                "condition_class": props.get("condition_class", "unknown"),
+                "iri": props.get("avg_iri", 0),
+                "intervention_name": interv.get("name", "N/A"),
+                "intervention_code": interv.get("code", "N/A"),
+                "length_km": props.get("length_km", 0),
+            })
+
         condition_data = {
             "source": "video_pipeline",
             "surface_type": summary.get("dominant_surface", "gravel"),
@@ -1289,7 +1310,7 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
             "overall_condition": _iri_to_score(avg_iri),
             "defects": distress_list,
             "drainage_condition": "unknown",
-            "sections": result.get("interventions", {}).get("sections", []),
+            "sections": report_sections,
         }
 
         # --- Build map layer ---
@@ -1345,6 +1366,8 @@ def run_video_pipeline(n_clicks, force_reanalyse, video_path_input, gpx_path_inp
                 "summary": summary, "geojson": geojson, "panel_data": panel_data,
                 "interventions": result.get("interventions", {}),
                 "equity_narrative": equity_narrative,
+                "narrative": narrative,
+                "metadata": result.get("metadata", {}),
             }),
             map_children,
             bounds,
@@ -1727,7 +1750,7 @@ def run_cba_callback(
         waterfall = create_waterfall_chart(cba_results)
         cashflow = create_cashflow_chart(cba_results)
         traffic = create_traffic_growth_chart(cba_results)
-        charts_ui = html.Div([
+        chart_children = [
             html.Div(
                 dcc.Graph(figure=waterfall, config={"displayModeBar": False}),
                 className="chart-container",
@@ -1740,7 +1763,60 @@ def run_cba_callback(
                 dcc.Graph(figure=traffic, config={"displayModeBar": False}),
                 className="chart-container",
             ),
-        ])
+        ]
+
+        # Deterioration chart (IRI forecast)
+        try:
+            from engine.deterioration import (
+                create_deterioration_chart, get_deterioration_summary,
+                generate_narrative as deterioration_narrative_fn, SURFACE_MAP,
+            )
+            # Extract IRI and surface from condition data
+            det_iri = None
+            det_surface = "paved_fair"
+            if condition_data:
+                det_iri = condition_data.get("iri") or condition_data.get("overall_iri_estimate")
+                if isinstance(det_iri, dict):
+                    det_iri = det_iri.get("mid") or det_iri.get("max") or 8.0
+                raw_surface = condition_data.get("surface_type", "")
+                if isinstance(raw_surface, str):
+                    det_surface = SURFACE_MAP.get(raw_surface.lower(), "paved_fair")
+
+            if det_iri is not None and isinstance(det_iri, (int, float)):
+                road_name = ""
+                if road_data:
+                    road_name = road_data.get("name") or road_data.get("road_name") or "Road"
+                det_fig = create_deterioration_chart(
+                    iri_current=float(det_iri),
+                    surface_type=det_surface,
+                    adt=float(adt),
+                    analysis_period=int(analysis_period or 20),
+                    construction_years=int(construction_years or 3),
+                    base_year=int(base_year or 2026),
+                    road_name=road_name,
+                )
+                chart_children.append(
+                    html.Div(
+                        dcc.Graph(figure=det_fig, config={"displayModeBar": False}),
+                        className="chart-container",
+                    )
+                )
+                # Store summary and narrative in cba_results for PDF report
+                det_summary = get_deterioration_summary(
+                    iri_current=float(det_iri),
+                    surface_type=det_surface,
+                    adt=float(adt),
+                    analysis_period=int(analysis_period or 20),
+                    construction_years=int(construction_years or 3),
+                    road_name=road_name,
+                    road_length_km=road_length,
+                )
+                cba_results["deterioration_summary"] = det_summary
+                cba_results["deterioration_narrative"] = deterioration_narrative_fn(det_summary)
+        except Exception:
+            pass
+
+        charts_ui = html.Div(chart_children)
     except Exception:
         pass
 
@@ -2209,10 +2285,12 @@ def show_equity_step(current_step, video_data, condition_data):
     State("sensitivity-store", "data"),
     State("equity-store", "data"),
     State("condition-store", "data"),
+    State("video-condition-store", "data"),
     prevent_initial_call=True,
 )
 def generate_pdf_report(n_clicks, road_data, facilities_data, pop_data,
-                        cba_results, sensitivity_results, equity_results, condition_data):
+                        cba_results, sensitivity_results, equity_results,
+                        condition_data, video_data):
     from output.report import generate_report_pdf, get_report_summary
 
     try:
@@ -2224,10 +2302,14 @@ def generate_pdf_report(n_clicks, road_data, facilities_data, pop_data,
             sensitivity_results=sensitivity_results,
             equity_results=equity_results,
             condition_data=condition_data,
+            video_data=video_data,
         )
+        # Use dataset name for filename if road name not available
         road_name = "Road"
         if road_data and road_data.get("name"):
             road_name = road_data["name"].replace(" ", "_")
+        elif video_data and video_data.get("metadata", {}).get("dataset_name"):
+            road_name = video_data["metadata"]["dataset_name"].replace(" ", "_")
         date_str = datetime.now().strftime("%Y%m%d")
         filename = f"TARA_Report_{road_name}_{date_str}.pdf"
 
@@ -2238,6 +2320,86 @@ def generate_pdf_report(n_clicks, road_data, facilities_data, pop_data,
         )
     except Exception as e:
         return no_update, dbc.Alert(f"Error generating report: {str(e)}", color="danger")
+
+
+# --- Step 7: Report preview ---
+
+@callback(
+    Output("report-preview", "children"),
+    Input("current-step-store", "data"),
+    State("road-data-store", "data"),
+    State("results-store", "data"),
+    State("sensitivity-store", "data"),
+    State("equity-store", "data"),
+    State("condition-store", "data"),
+    State("video-condition-store", "data"),
+    prevent_initial_call=True,
+)
+def update_report_preview(current_step, road_data, cba_results, sensitivity_results,
+                          equity_results, condition_data, video_data):
+    if current_step != 7:
+        raise dash.exceptions.PreventUpdate
+
+    # Determine road name
+    road_name = "Road Appraisal"
+    if road_data and road_data.get("name"):
+        road_name = road_data["name"]
+    elif video_data and video_data.get("metadata", {}).get("dataset_name"):
+        raw = video_data["metadata"]["dataset_name"]
+        road_name = raw.replace("_", " ").replace("-", " ").title()
+
+    # Determine length and sections
+    total_length = 0
+    n_sections = 0
+    if condition_data and condition_data.get("sections"):
+        sections = condition_data["sections"]
+        n_sections = len(sections)
+        total_length = sum(s.get("length_km", 0) for s in sections)
+    elif video_data and video_data.get("metadata"):
+        total_length = video_data["metadata"].get("total_distance_km", 0)
+        n_sections = video_data["metadata"].get("sections_count", 0)
+
+    date_str = datetime.now().strftime("%d %B %Y")
+
+    preview_items = [
+        html.H6("TARA Road Appraisal Report", style={
+            "fontWeight": "700", "color": "#2d5f4a", "marginBottom": "4px"}),
+        html.P(road_name, style={"fontWeight": "bold", "marginBottom": "2px"}),
+        html.P(f"Generated: {date_str}", style={
+            "fontStyle": "italic", "color": "#8a8578", "fontSize": "0.85rem",
+            "marginBottom": "8px"}),
+        html.Hr(style={"margin": "8px 0"}),
+    ]
+
+    if cba_results:
+        s = cba_results.get("summary", {})
+        npv = cba_results.get("npv", 0)
+        eirr = s.get("eirr_pct", "N/A")
+        bcr = cba_results.get("bcr", 0)
+        viable = s.get("economically_viable", False)
+        preview_items.append(html.P(
+            f"NPV: ${npv:,.0f}  |  EIRR: {eirr}%  |  BCR: {bcr:.2f}",
+            style={"fontSize": "0.85rem", "marginBottom": "2px"}))
+        verdict_color = "#2d5f4a" if viable else "#a83a2f"
+        preview_items.append(html.P(
+            f"Verdict: {'ECONOMICALLY VIABLE' if viable else 'NOT VIABLE'}",
+            style={"fontWeight": "bold", "color": verdict_color,
+                   "fontSize": "0.85rem", "marginBottom": "2px"}))
+
+    if equity_results:
+        eq_score = equity_results.get("overall_score", "N/A")
+        preview_items.append(html.P(
+            f"Equity Score: {eq_score}/100",
+            style={"fontSize": "0.85rem", "marginBottom": "2px"}))
+
+    if total_length > 0:
+        preview_items.append(html.P(
+            f"Road Length: {total_length:.1f} km  |  Sections: {n_sections}",
+            style={"fontSize": "0.85rem", "marginBottom": "2px"}))
+
+    return html.Div(preview_items, style={
+        "background": "#f8f7f5", "border": "2px solid #2d5f4a",
+        "borderRadius": "8px", "padding": "12px 16px", "marginBottom": "12px"})
 
 
 # --- Step 7: CSV ---

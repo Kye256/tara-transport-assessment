@@ -100,37 +100,59 @@ def generate_report_pdf(
     sensitivity_results: Optional[dict] = None,
     equity_results: Optional[dict] = None,
     condition_data: Optional[dict] = None,
+    video_data: Optional[dict] = None,
 ) -> bytes:
     """
     Generate a PDF appraisal report.
 
     Args:
-        Same as generate_report_markdown()
+        Same as generate_report_markdown(), plus:
+        video_data: Data from video-condition-store (narratives, metadata, etc.)
 
     Returns:
         PDF file as bytes
     """
+    import os
     from fpdf import FPDF
 
-    road_name = _get_road_name(road_data)
+    road_name = _get_road_name(road_data, condition_data, video_data)
+    road_length = _get_road_length(road_data, condition_data, video_data)
     date_str = datetime.now().strftime("%d %B %Y")
+
+    # Extract narratives from video data
+    condition_narrative = ""
+    equity_narrative = ""
+    if video_data:
+        condition_narrative = video_data.get("narrative", "")
+        equity_narrative = video_data.get("equity_narrative", "")
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=20)
+    page_width = pdf.w
 
     # Title page
     pdf.add_page()
+
+    # Green header bar
+    pdf.set_fill_color(45, 95, 74)  # #2d5f4a
+    pdf.rect(0, 0, page_width, 60, "F")
+    pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 24)
-    pdf.cell(0, 40, "", ln=True)
-    pdf.cell(0, 15, "TARA", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 14)
-    pdf.cell(0, 10, "Transport Appraisal & Risk Analysis", ln=True, align="C")
-    pdf.cell(0, 20, "", ln=True)
+    pdf.set_y(12)
+    pdf.cell(0, 12, "TARA", ln=True, align="C")
+    pdf.set_font("Helvetica", "", 12)
+    pdf.cell(0, 8, "Transport Appraisal & Risk Analysis", ln=True, align="C")
+    pdf.set_text_color(0, 0, 0)
+
+    pdf.cell(0, 30, "", ln=True)
     pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 12, "Road Appraisal Report", ln=True, align="C")
+    pdf.cell(0, 12, road_name, ln=True, align="C")
+    if road_length is not None:
+        pdf.set_font("Helvetica", "", 14)
+        pdf.cell(0, 10, f"{road_length} km", ln=True, align="C")
     pdf.cell(0, 10, "", ln=True)
-    pdf.set_font("Helvetica", "", 14)
-    pdf.cell(0, 10, road_name, ln=True, align="C")
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 10, "Road Appraisal Report", ln=True, align="C")
     pdf.cell(0, 10, "", ln=True)
     pdf.set_font("Helvetica", "", 11)
     pdf.cell(0, 8, date_str, ln=True, align="C")
@@ -141,15 +163,16 @@ def generate_report_pdf(
     # Executive Summary
     pdf.add_page()
     _pdf_section_header(pdf, "1. Executive Summary")
-    _pdf_executive_summary(pdf, road_data, cba_results, sensitivity_results, equity_results)
+    _pdf_executive_summary(pdf, road_data, cba_results, sensitivity_results,
+                           equity_results, condition_data, video_data)
 
     # Road Description
     _pdf_section_header(pdf, "2. Road Description")
-    _pdf_road_description(pdf, road_data)
+    _pdf_road_description(pdf, road_data, condition_data, video_data)
 
     # Corridor Context
     _pdf_section_header(pdf, "3. Corridor Context")
-    _pdf_corridor_context(pdf, population_data, facilities_data)
+    _pdf_corridor_context(pdf, population_data, facilities_data, video_data)
 
     # Traffic Analysis
     pdf.add_page()
@@ -163,6 +186,9 @@ def generate_report_pdf(
     # Charts
     _pdf_embed_charts(pdf, cba_results, sensitivity_results)
 
+    # Deterioration Forecast (if IRI data available)
+    _pdf_deterioration(pdf, cba_results, condition_data)
+
     # Sensitivity Analysis
     pdf.add_page()
     _pdf_section_header(pdf, "6. Sensitivity Analysis")
@@ -170,13 +196,14 @@ def generate_report_pdf(
 
     # Equity Assessment
     _pdf_section_header(pdf, "7. Equity Assessment")
-    _pdf_equity_assessment(pdf, equity_results)
+    _pdf_equity_assessment(pdf, equity_results, equity_narrative)
 
     # Road Condition
     if condition_data and (condition_data.get("found") or condition_data.get("source") == "video_pipeline"):
         pdf.add_page()
         _pdf_section_header(pdf, "8. Road Condition")
-        _pdf_road_condition(pdf, condition_data)
+        _pdf_road_condition(pdf, condition_data, condition_narrative)
+        _pdf_embed_dashcam_images(pdf, video_data)
 
     # Risk & Recommendation
     pdf.add_page()
@@ -217,12 +244,33 @@ def get_report_summary(
 
 # --- Markdown Section Helpers ---
 
-def _get_road_name(road_data: Optional[dict]) -> str:
+def _get_road_name(road_data: Optional[dict], condition_data: Optional[dict] = None,
+                   video_data: Optional[dict] = None) -> str:
     if road_data:
         name = road_data.get("name") or road_data.get("road_name")
         if name:
             return name
+    # Fall back to video pipeline dataset name
+    if video_data and video_data.get("metadata", {}).get("dataset_name"):
+        raw = video_data["metadata"]["dataset_name"]
+        return raw.replace("_", " ").replace("-", " ").title()
     return "Road Appraisal"
+
+
+def _get_road_length(road_data: Optional[dict] = None, condition_data: Optional[dict] = None,
+                     video_data: Optional[dict] = None) -> Optional[float]:
+    if road_data and road_data.get("total_length_km"):
+        try:
+            return float(road_data["total_length_km"])
+        except (ValueError, TypeError):
+            pass
+    if condition_data and condition_data.get("sections"):
+        total = sum(s.get("length_km", 0) for s in condition_data["sections"])
+        if total > 0:
+            return round(total, 1)
+    if video_data and video_data.get("metadata", {}).get("total_distance_km"):
+        return round(video_data["metadata"]["total_distance_km"], 1)
+    return None
 
 
 def _section_executive_summary(road_data, cba_results, sensitivity_results, equity_results) -> str:
@@ -572,11 +620,47 @@ def _section_recommendation(cba_results, sensitivity_results, equity_results) ->
 
 # --- PDF Section Helpers ---
 
+def _sanitize_text(text: str) -> str:
+    """Replace non-Latin-1 characters and strip markdown for fpdf Helvetica."""
+    import re
+    replacements = {
+        "\u2014": "-",   # em dash
+        "\u2013": "-",   # en dash
+        "\u2018": "'",   # left single quote
+        "\u2019": "'",   # right single quote
+        "\u201c": '"',   # left double quote
+        "\u201d": '"',   # right double quote
+        "\u2026": "...", # ellipsis
+        "\u2022": "-",   # bullet
+        "\u00b2": "2",   # superscript 2
+    }
+    for char, repl in replacements.items():
+        text = text.replace(char, repl)
+    # Strip markdown headers (## Heading → Heading)
+    text = re.sub(r"^#{1,4}\s+", "", text, flags=re.MULTILINE)
+    # Strip bold/italic markers
+    text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", text)
+    # Final fallback: encode to latin-1 and drop any remaining problematic chars
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
+def _clean_surface_name(surface: str) -> str:
+    """Clean surface type names for display (e.g. paved_asphalt → Paved Asphalt)."""
+    return surface.replace("_", " ").title()
+
+
 def _pdf_section_header(pdf, title: str):
     pdf.set_font("Helvetica", "B", 14)
     pdf.cell(0, 12, title, ln=True)
+    # Thin green line under heading
+    pdf.set_draw_color(45, 95, 74)  # #2d5f4a
+    pdf.set_line_width(0.7)
+    y = pdf.get_y()
+    pdf.line(pdf.l_margin, y, pdf.w - pdf.r_margin, y)
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_line_width(0.2)
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 3, "", ln=True)
+    pdf.cell(0, 5, "", ln=True)
 
 
 def _pdf_paragraph(pdf, text: str):
@@ -592,10 +676,12 @@ def _pdf_table_row(pdf, cells: list[str], widths: list[int], bold: bool = False)
     pdf.ln()
 
 
-def _pdf_executive_summary(pdf, road_data, cba_results, sensitivity_results, equity_results):
-    road_name = _get_road_name(road_data)
-    road_length = road_data.get("total_length_km", "N/A") if road_data else "N/A"
-    _pdf_paragraph(pdf, f"This report presents the economic appraisal of the {road_name} ({road_length} km).")
+def _pdf_executive_summary(pdf, road_data, cba_results, sensitivity_results, equity_results,
+                           condition_data=None, video_data=None):
+    road_name = _get_road_name(road_data, condition_data, video_data)
+    road_length = _get_road_length(road_data, condition_data, video_data)
+    length_str = f"{road_length} km" if road_length else "N/A km"
+    _pdf_paragraph(pdf, f"This report presents the economic appraisal of the {road_name} ({length_str}).")
 
     if cba_results:
         s = cba_results.get("summary", {})
@@ -617,22 +703,44 @@ def _pdf_executive_summary(pdf, road_data, cba_results, sensitivity_results, equ
             _pdf_paragraph(pdf, s["recommendation"])
 
 
-def _pdf_road_description(pdf, road_data):
-    if not road_data or not road_data.get("found"):
-        _pdf_paragraph(pdf, "Road data not available.")
+def _pdf_road_description(pdf, road_data, condition_data=None, video_data=None):
+    if road_data and road_data.get("found"):
+        attrs = road_data.get("attributes", {})
+        widths = [40, 65]
+        _pdf_table_row(pdf, ["Attribute", "Value"], widths, bold=True)
+        _pdf_table_row(pdf, ["Name", road_data.get("name", "Unknown")], widths)
+        _pdf_table_row(pdf, ["Length", f"{road_data.get('total_length_km', 'N/A')} km"], widths)
+        _pdf_table_row(pdf, ["Surface", ", ".join(attrs.get("surface_types", ["Unknown"]))], widths)
+        _pdf_table_row(pdf, ["Highway Type", ", ".join(attrs.get("highway_types", ["Unknown"]))], widths)
+        pdf.cell(0, 5, "", ln=True)
         return
 
-    attrs = road_data.get("attributes", {})
-    widths = [40, 65]
-    _pdf_table_row(pdf, ["Attribute", "Value"], widths, bold=True)
-    _pdf_table_row(pdf, ["Name", road_data.get("name", "Unknown")], widths)
-    _pdf_table_row(pdf, ["Length", f"{road_data.get('total_length_km', 'N/A')} km"], widths)
-    _pdf_table_row(pdf, ["Surface", ", ".join(attrs.get("surface_types", ["Unknown"]))], widths)
-    _pdf_table_row(pdf, ["Highway Type", ", ".join(attrs.get("highway_types", ["Unknown"]))], widths)
-    pdf.cell(0, 5, "", ln=True)
+    # Video-only flow — generate description from pipeline data
+    road_length = _get_road_length(None, condition_data, video_data)
+    surface = "unknown"
+    n_sections = 0
+    n_frames = 0
+
+    if condition_data and condition_data.get("source") == "video_pipeline":
+        surface = (condition_data.get("surface_type") or "unknown").title()
+        sections = condition_data.get("sections", [])
+        n_sections = len(sections)
+
+    if video_data and video_data.get("summary"):
+        surface = _clean_surface_name(video_data["summary"].get("dominant_surface") or surface)
+        n_frames = video_data["summary"].get("total_frames_assessed", 0)
+    elif video_data and video_data.get("metadata"):
+        n_frames = video_data["metadata"].get("frames_sent_to_vision", 0)
+        n_sections = n_sections or video_data["metadata"].get("sections_count", 0)
+
+    length_str = f"{road_length} km" if road_length else "unknown length"
+    desc = (f"The assessed corridor is approximately {length_str} of predominantly "
+            f"{surface.lower()} surface road. The assessment covered {n_sections} sections "
+            f"based on dashcam analysis of {n_frames} frames.")
+    _pdf_paragraph(pdf, desc)
 
 
-def _pdf_corridor_context(pdf, population_data, facilities_data):
+def _pdf_corridor_context(pdf, population_data, facilities_data, video_data=None):
     if population_data and population_data.get("found"):
         pdf.set_font("Helvetica", "B", 11)
         pdf.cell(0, 8, "Population", ln=True)
@@ -648,7 +756,7 @@ def _pdf_corridor_context(pdf, population_data, facilities_data):
         pdf.cell(0, 3, "", ln=True)
         _pdf_paragraph(pdf, f"Classification: {population_data.get('classification', 'unknown').title()}")
     else:
-        _pdf_paragraph(pdf, "Population data not available.")
+        _pdf_paragraph(pdf, "Population data not available for this corridor.")
 
     if facilities_data and facilities_data.get("total_count", 0) > 0:
         pdf.set_font("Helvetica", "B", 11)
@@ -661,6 +769,14 @@ def _pdf_corridor_context(pdf, population_data, facilities_data):
             if items:
                 _pdf_table_row(pdf, [cat.title(), str(len(items))], widths)
         pdf.cell(0, 3, "", ln=True)
+    elif video_data and video_data.get("equity_narrative"):
+        # Use camera-based equity observations as corridor context
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 8, "Corridor Observations (Camera-Based)", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        _pdf_paragraph(pdf, "Facility and land use data derived from dashcam imagery analysis.")
+    else:
+        _pdf_paragraph(pdf, "Facility data not available.")
 
 
 def _pdf_traffic_analysis(pdf, cba_results):
@@ -725,6 +841,74 @@ def _pdf_embed_charts(pdf, cba_results, sensitivity_results):
         pass
 
 
+def _pdf_deterioration(pdf, cba_results, condition_data=None):
+    """Embed deterioration forecast chart and summary into PDF."""
+    if not cba_results:
+        return
+
+    det_summary = cba_results.get("deterioration_summary")
+    det_narrative = cba_results.get("deterioration_narrative")
+    if not det_summary:
+        return
+
+    try:
+        import tempfile
+        import os
+        from engine.deterioration import create_deterioration_chart, SURFACE_MAP
+
+        # Reconstruct IRI and surface from summary
+        iri_current = det_summary.get("iri_current", 8.0)
+        surface_type = det_summary.get("surface_type", "paved_fair")
+        # Get ADT from cba_results traffic forecast
+        adt = 1000.0
+        tf = cba_results.get("traffic_forecast", {})
+        if tf.get("base_adt"):
+            adt = float(tf["base_adt"])
+
+        fig = create_deterioration_chart(
+            iri_current=iri_current,
+            surface_type=surface_type,
+            adt=adt,
+            analysis_period=det_summary.get("analysis_period", 20),
+            construction_years=det_summary.get("construction_years", 3),
+            road_name=det_summary.get("road_name", "Road"),
+        )
+
+        pdf.add_page()
+        _pdf_section_header(pdf, "Deterioration Forecast")
+
+        # Summary table
+        widths = [60, 50]
+        _pdf_table_row(pdf, ["Parameter", "Value"], widths, bold=True)
+        _pdf_table_row(pdf, ["Current IRI", f"{det_summary['iri_current']:.1f} m/km"], widths)
+        _pdf_table_row(pdf, ["Do-Nothing IRI (end)", f"{det_summary['iri_do_nothing_end']:.1f} m/km"], widths)
+        _pdf_table_row(pdf, ["With-Project IRI (end)", f"{det_summary['iri_with_project_end']:.1f} m/km"], widths)
+        _pdf_table_row(pdf, ["IRI Saving (end)", f"{det_summary['iri_saving_end']:.1f} m/km"], widths)
+        _pdf_table_row(pdf, ["Avg IRI Saving", f"{det_summary.get('avg_iri_saving', 0):.1f} m/km"], widths)
+        if det_summary.get("years_until_poor") is not None:
+            _pdf_table_row(pdf, ["Years to Poor (IRI 10)", f"{det_summary['years_until_poor']} years"], widths)
+        _pdf_table_row(pdf, ["Deterioration Rate (k)", f"{det_summary['deterioration_rate_k']:.4f}"], widths)
+        _pdf_table_row(pdf, ["Post-Construction IRI", f"{det_summary['post_construction_iri']:.1f} m/km"], widths)
+        pdf.cell(0, 5, "", ln=True)
+
+        # Chart image
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            fig.write_image(tmp.name, width=800, height=350, scale=2)
+            pdf.image(tmp.name, x=10, w=190)
+            os.unlink(tmp.name)
+
+        pdf.cell(0, 5, "", ln=True)
+
+        # Narrative
+        if det_narrative:
+            pdf.set_font("Helvetica", "I", 10)
+            pdf.multi_cell(0, 5, _sanitize_text(det_narrative))
+            pdf.set_font("Helvetica", "", 10)
+
+    except Exception:
+        pass
+
+
 def _pdf_sensitivity_analysis(pdf, sensitivity_results):
     if not sensitivity_results:
         _pdf_paragraph(pdf, "Sensitivity analysis not available.")
@@ -746,7 +930,7 @@ def _pdf_sensitivity_analysis(pdf, sensitivity_results):
     _pdf_paragraph(pdf, f"Risk: {summary.get('risk_assessment', 'N/A')}")
 
 
-def _pdf_equity_assessment(pdf, equity_results):
+def _pdf_equity_assessment(pdf, equity_results, equity_narrative: str = ""):
     if not equity_results:
         _pdf_paragraph(pdf, "Equity assessment not available.")
         return
@@ -776,15 +960,23 @@ def _pdf_equity_assessment(pdf, equity_results):
     _pdf_table_row(pdf, ["Facility Access", f"{equity_results.get('facility_access_index', 'N/A')}/100", "15%"], widths)
     pdf.cell(0, 5, "", ln=True)
 
+    # Equity narrative
+    if equity_narrative:
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 8, "Equity Impact Assessment", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 7, _sanitize_text(equity_narrative))
+        pdf.cell(0, 3, "", ln=True)
 
-def _pdf_road_condition(pdf, condition_data):
+
+def _pdf_road_condition(pdf, condition_data, condition_narrative: str = ""):
     widths = [45, 55]
     _pdf_table_row(pdf, ["Metric", "Value"], widths, bold=True)
     _pdf_table_row(pdf, ["Overall Condition", f"{condition_data.get('overall_condition', 'N/A')}/100"], widths)
 
     surface = condition_data.get("surface_type", "N/A")
     if isinstance(surface, str):
-        surface = surface.title()
+        surface = _clean_surface_name(surface)
     _pdf_table_row(pdf, ["Surface Type", surface], widths)
 
     iri = condition_data.get("iri") or condition_data.get("overall_iri_estimate")
@@ -802,6 +994,15 @@ def _pdf_road_condition(pdf, condition_data):
         pdf.cell(0, 5, "", ln=True)
         _pdf_paragraph(pdf, f"Defects: {', '.join(d.replace('_', ' ').title() for d in defects)}")
 
+    # Condition narrative
+    if condition_narrative:
+        pdf.cell(0, 3, "", ln=True)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 8, "Condition Assessment Narrative", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 7, _sanitize_text(condition_narrative))
+        pdf.cell(0, 3, "", ln=True)
+
     # Per-section table
     sections_data = condition_data.get("sections", [])
     if sections_data:
@@ -812,7 +1013,7 @@ def _pdf_road_condition(pdf, condition_data):
         _pdf_table_row(pdf, ["Sec", "Surface", "Condition", "IRI", "Intervention"], sec_widths, bold=True)
         for sec in sections_data:
             sec_num = str(sec.get("section_index", 0) + 1)
-            sec_surf = sec.get("surface_type", "?").title()
+            sec_surf = _clean_surface_name(sec.get("surface_type", "?"))
             sec_cond = sec.get("condition_class", "?").title()
             sec_iri = sec.get("iri", "?")
             if isinstance(sec_iri, (int, float)):
@@ -821,6 +1022,65 @@ def _pdf_road_condition(pdf, condition_data):
             if len(str(sec_int)) > 22:
                 sec_int = str(sec_int)[:20] + ".."
             _pdf_table_row(pdf, [sec_num, sec_surf, sec_cond, str(sec_iri), str(sec_int)], sec_widths)
+
+
+def _pdf_embed_dashcam_images(pdf, video_data: Optional[dict] = None):
+    """Embed representative dashcam frames into the PDF."""
+    import os
+    import glob as globmod
+
+    if not video_data or not video_data.get("metadata"):
+        return
+
+    # Try to find frames in /tmp/tara_frames/ or the dataset cache
+    frame_dirs = ["/tmp/tara_frames"]
+    dataset_name = video_data.get("metadata", {}).get("dataset_name", "")
+    if dataset_name:
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "data", "videos", dataset_name)
+        frame_dirs.append(os.path.join(base, "cache", "frames"))
+        frame_dirs.append(os.path.join(base, "frames"))
+
+    frame_files = []
+    for d in frame_dirs:
+        if os.path.isdir(d):
+            found = sorted(globmod.glob(os.path.join(d, "frame_*.jpg")))
+            if found:
+                frame_files = found
+                break
+
+    if not frame_files:
+        return
+
+    # Pick representative frames at 25%, 50%, 75%
+    n = len(frame_files)
+    indices = [n // 4, n // 2, 3 * n // 4]
+    indices = [i for i in indices if 0 <= i < n]
+    # Deduplicate
+    seen = set()
+    unique_indices = []
+    for i in indices:
+        if i not in seen:
+            seen.add(i)
+            unique_indices.append(i)
+
+    if not unique_indices:
+        return
+
+    pdf.add_page()
+    _pdf_section_header(pdf, "Dashcam Imagery")
+
+    for idx in unique_indices:
+        frame_path = frame_files[idx]
+        if os.path.exists(frame_path):
+            try:
+                pdf.image(frame_path, x=15, w=180)
+                pdf.set_font("Helvetica", "I", 8)
+                frame_label = os.path.basename(frame_path).replace(".jpg", "").replace("_", " ").title()
+                pdf.cell(0, 5, f"  {frame_label} (sample from corridor)", ln=True)
+                pdf.cell(0, 5, "", ln=True)
+            except Exception:
+                continue
 
 
 def _pdf_risk_recommendation(pdf, cba_results, sensitivity_results, equity_results):
