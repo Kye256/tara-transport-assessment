@@ -1750,7 +1750,7 @@ def run_cba_callback(
         waterfall = create_waterfall_chart(cba_results)
         cashflow = create_cashflow_chart(cba_results)
         traffic = create_traffic_growth_chart(cba_results)
-        charts_ui = html.Div([
+        chart_children = [
             html.Div(
                 dcc.Graph(figure=waterfall, config={"displayModeBar": False}),
                 className="chart-container",
@@ -1763,7 +1763,60 @@ def run_cba_callback(
                 dcc.Graph(figure=traffic, config={"displayModeBar": False}),
                 className="chart-container",
             ),
-        ])
+        ]
+
+        # Deterioration chart (IRI forecast)
+        try:
+            from engine.deterioration import (
+                create_deterioration_chart, get_deterioration_summary,
+                generate_narrative as deterioration_narrative_fn, SURFACE_MAP,
+            )
+            # Extract IRI and surface from condition data
+            det_iri = None
+            det_surface = "paved_fair"
+            if condition_data:
+                det_iri = condition_data.get("iri") or condition_data.get("overall_iri_estimate")
+                if isinstance(det_iri, dict):
+                    det_iri = det_iri.get("mid") or det_iri.get("max") or 8.0
+                raw_surface = condition_data.get("surface_type", "")
+                if isinstance(raw_surface, str):
+                    det_surface = SURFACE_MAP.get(raw_surface.lower(), "paved_fair")
+
+            if det_iri is not None and isinstance(det_iri, (int, float)):
+                road_name = ""
+                if road_data:
+                    road_name = road_data.get("name") or road_data.get("road_name") or "Road"
+                det_fig = create_deterioration_chart(
+                    iri_current=float(det_iri),
+                    surface_type=det_surface,
+                    adt=float(adt),
+                    analysis_period=int(analysis_period or 20),
+                    construction_years=int(construction_years or 3),
+                    base_year=int(base_year or 2026),
+                    road_name=road_name,
+                )
+                chart_children.append(
+                    html.Div(
+                        dcc.Graph(figure=det_fig, config={"displayModeBar": False}),
+                        className="chart-container",
+                    )
+                )
+                # Store summary and narrative in cba_results for PDF report
+                det_summary = get_deterioration_summary(
+                    iri_current=float(det_iri),
+                    surface_type=det_surface,
+                    adt=float(adt),
+                    analysis_period=int(analysis_period or 20),
+                    construction_years=int(construction_years or 3),
+                    road_name=road_name,
+                    road_length_km=road_length,
+                )
+                cba_results["deterioration_summary"] = det_summary
+                cba_results["deterioration_narrative"] = deterioration_narrative_fn(det_summary)
+        except Exception:
+            pass
+
+        charts_ui = html.Div(chart_children)
     except Exception:
         pass
 

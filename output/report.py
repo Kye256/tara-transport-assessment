@@ -186,6 +186,9 @@ def generate_report_pdf(
     # Charts
     _pdf_embed_charts(pdf, cba_results, sensitivity_results)
 
+    # Deterioration Forecast (if IRI data available)
+    _pdf_deterioration(pdf, cba_results, condition_data)
+
     # Sensitivity Analysis
     pdf.add_page()
     _pdf_section_header(pdf, "6. Sensitivity Analysis")
@@ -835,6 +838,74 @@ def _pdf_embed_charts(pdf, cba_results, sensitivity_results):
                 # kaleido not available or chart export failed - skip chart
                 continue
     except ImportError:
+        pass
+
+
+def _pdf_deterioration(pdf, cba_results, condition_data=None):
+    """Embed deterioration forecast chart and summary into PDF."""
+    if not cba_results:
+        return
+
+    det_summary = cba_results.get("deterioration_summary")
+    det_narrative = cba_results.get("deterioration_narrative")
+    if not det_summary:
+        return
+
+    try:
+        import tempfile
+        import os
+        from engine.deterioration import create_deterioration_chart, SURFACE_MAP
+
+        # Reconstruct IRI and surface from summary
+        iri_current = det_summary.get("iri_current", 8.0)
+        surface_type = det_summary.get("surface_type", "paved_fair")
+        # Get ADT from cba_results traffic forecast
+        adt = 1000.0
+        tf = cba_results.get("traffic_forecast", {})
+        if tf.get("base_adt"):
+            adt = float(tf["base_adt"])
+
+        fig = create_deterioration_chart(
+            iri_current=iri_current,
+            surface_type=surface_type,
+            adt=adt,
+            analysis_period=det_summary.get("analysis_period", 20),
+            construction_years=det_summary.get("construction_years", 3),
+            road_name=det_summary.get("road_name", "Road"),
+        )
+
+        pdf.add_page()
+        _pdf_section_header(pdf, "Deterioration Forecast")
+
+        # Summary table
+        widths = [60, 50]
+        _pdf_table_row(pdf, ["Parameter", "Value"], widths, bold=True)
+        _pdf_table_row(pdf, ["Current IRI", f"{det_summary['iri_current']:.1f} m/km"], widths)
+        _pdf_table_row(pdf, ["Do-Nothing IRI (end)", f"{det_summary['iri_do_nothing_end']:.1f} m/km"], widths)
+        _pdf_table_row(pdf, ["With-Project IRI (end)", f"{det_summary['iri_with_project_end']:.1f} m/km"], widths)
+        _pdf_table_row(pdf, ["IRI Saving (end)", f"{det_summary['iri_saving_end']:.1f} m/km"], widths)
+        _pdf_table_row(pdf, ["Avg IRI Saving", f"{det_summary.get('avg_iri_saving', 0):.1f} m/km"], widths)
+        if det_summary.get("years_until_poor") is not None:
+            _pdf_table_row(pdf, ["Years to Poor (IRI 10)", f"{det_summary['years_until_poor']} years"], widths)
+        _pdf_table_row(pdf, ["Deterioration Rate (k)", f"{det_summary['deterioration_rate_k']:.4f}"], widths)
+        _pdf_table_row(pdf, ["Post-Construction IRI", f"{det_summary['post_construction_iri']:.1f} m/km"], widths)
+        pdf.cell(0, 5, "", ln=True)
+
+        # Chart image
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            fig.write_image(tmp.name, width=800, height=350, scale=2)
+            pdf.image(tmp.name, x=10, w=190)
+            os.unlink(tmp.name)
+
+        pdf.cell(0, 5, "", ln=True)
+
+        # Narrative
+        if det_narrative:
+            pdf.set_font("Helvetica", "I", 10)
+            pdf.multi_cell(0, 5, _sanitize_text(det_narrative))
+            pdf.set_font("Helvetica", "", 10)
+
+    except Exception:
         pass
 
 
