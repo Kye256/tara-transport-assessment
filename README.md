@@ -55,6 +55,6 @@ streamlit run app.py
 
 ## Built for the Anthropic Claude Code Hackathon (Feb 2026)
 
-**Team:** [Your name]  
+**Team:** TARA
 **License:** MIT  
 **Open Source:** All components are fully open source
