@@ -83,7 +83,8 @@ tara-transport-assessment/
 │   ├── cba.py              # Cost-benefit analysis (NPV, EIRR, BCR, FYRR)
 │   ├── traffic.py          # Traffic forecasting (per-vehicle-class)
 │   ├── sensitivity.py      # Sensitivity & scenario analysis
-│   └── equity.py           # Equity scoring
+│   ├── equity.py           # Equity scoring
+│   └── deterioration.py    # Road deterioration modelling
 ├── video/                  # Video processing pipeline
 │   ├── video_pipeline.py   # End-to-end dashcam → condition pipeline
 │   ├── video_frames.py     # Frame extraction from video clips

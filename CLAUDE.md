@@ -8,7 +8,6 @@ TARA is an AI agent for road project appraisal, built for the Anthropic Claude C
 ## Architecture
 - **Frontend:** Dash (Plotly) with 7-step wizard + persistent map
 - **Agent:** Claude Opus 4.6 via Anthropic API with tool_use
-- **Data Skills:** OSM (Overpass API), WorldPop, World Bank
 - **Analysis Engine:** Python (NumPy/Pandas) — CBA, sensitivity, equity
 - **Vision:** Claude Vision API for dashcam road condition analysis
 - **Maps:** dash-leaflet (Leaflet.js via Dash)
@@ -45,7 +44,6 @@ Kasangati-Matugga road, Wakiso District, Uganda (part of Kira-Kasangati-Matugga 
 - [x] Equity scoring
 - [x] Report generation
 - [x] Plotly charts (tornado, waterfall, cashflow, traffic, scenarios)
-- [x] WorldPop integration
 - [x] Input validation warnings (ADT, cost/km, discount rate, analysis period)
 - [x] Video pipeline validator: 12/12 passing (`python -m video.test_pipeline`)
 - [x] Intervention recommendation per section (Uganda-calibrated costs)
