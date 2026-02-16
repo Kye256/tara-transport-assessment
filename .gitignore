@@ -5,13 +5,20 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
+*.egg
 dist/
 build/
-*.egg
+
+# Virtual environments
+venv/
+.venv/
 
 # Data files (raw/large — only processed GeoJSON goes in repo)
 data/videos/
+!data/videos/*/cache/
+!data/videos/*/cache/*.json
 data/dashcam/
 data/gpx/
 data/worldpop/*.tif
@@ -28,6 +35,11 @@ data/*.sbn
 data/*.sbx
 data/travel_times/
 
+# Video/media files
+*.mov
+*.mp4
+*.avi
+
 # IDE
 .vscode/
 .idea/
@@ -40,6 +52,11 @@ output/*.geojson
 output/*.json
 output/*.md
 
-# Temp files
+# Temp & logs
 tmp/
 *.tmp
+*.log
+cache/
+
+# Misc
+untitled folder/
