@@ -126,7 +126,23 @@ Adapt the GitHub URL and fill in the project structure section by listing the ac
 - Do NOT refactor working code — only remove obvious junk
 - Add untracked artifact filenames to .gitignore so they don't get re-added
 
-### 7. Final check
+### 7. System dependencies check
+Scan the codebase for any imports or subprocess calls that require system-level packages beyond pip. Common ones to check for:
+- `ffmpeg` / `ffprobe` (video processing)
+- `gdal` / `ogr2ogr` (geospatial)
+- `cairo` (PDF/SVG rendering)
+- Any other non-Python binaries called via `subprocess` or `os.system`
+
+List all system dependencies found. These must be documented in the README installation section.
+
+Also verify that all local data files the app needs to run are committed to the repo (not gitignored). Check:
+- `data/uganda_main_roads.geojson` 
+- UBOS population/boundary data files
+- Any other files loaded at startup or during the cached demo flow
+
+Run the app fresh and note any FileNotFoundError or ImportError — those indicate missing dependencies or data.
+
+### 8. Final check
 Run the app once to make sure nothing is broken:
 ```bash
 python app.py
