@@ -21,11 +21,11 @@ TARA is an AI-powered road appraisal tool that transforms dashcam footage into c
 
 | Condition Assessment | Economic Analysis |
 |---|---|
-| ![Condition Map](docs/screenshots/condition-map.png) | ![CBA Results](docs/screenshots/cba-results.png) |
+| ![Condition Map](docs/screenshots/Condition.png) | ![CBA Results](docs/screenshots/CBA.png) |
 
 | Equity Assessment | Sensitivity Analysis |
 |---|---|
-| ![Equity](docs/screenshots/equity.png) | ![Sensitivity](docs/screenshots/sensitivity.png) |
+| ![Equity](docs/screenshots/Equity.png) | ![Sensitivity](docs/screenshots/Sensitivity.png) |
 
 ## What It Does
 
