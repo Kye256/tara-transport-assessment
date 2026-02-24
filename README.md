@@ -144,7 +144,7 @@ tara-transport-assessment/
 
 **Kyeyune Kazibwe** — Transport Engineer, Kampala, Uganda
 
-- Built solo in 6 days during the Anthropic Claude Code Hackathon (Feb 10-16, 2026)
+- Built with claude code in 6 days during the Anthropic Claude Code Hackathon (Feb 10-16, 2026)
 - Winner of the "Keep Thinking" Prize
 
 ## License
