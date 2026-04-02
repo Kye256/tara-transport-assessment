@@ -770,7 +770,7 @@ def select_road(road_id):
         "coordinates_all": road_record["coordinates"],
     }
 
-    # Try to load facilities (uses Overpass — wrap in try/except)
+    # Load facilities from local data (wrap in try/except)
     facilities_data = {"facilities": {}, "total_count": 0}
     try:
         from skills.osm_facilities import find_facilities, calculate_distances_to_road
@@ -789,10 +789,18 @@ def select_road(road_id):
     # Road info as HTML table
     info_rows = [
         html.Tr([html.Td("Length"), html.Td(f"{road_data['total_length_km']} km")]),
-        html.Tr([html.Td("Segments"), html.Td(f"{road_data['segment_count']}")]),
-        html.Tr([html.Td("Surface"), html.Td(road_record["surface"] or "unknown")]),
-        html.Tr([html.Td("Road Class"), html.Td(road_record["highway_class"].replace("_", " ").title())]),
     ]
+    if road_record.get("road_ref"):
+        info_rows.append(html.Tr([html.Td("Road Ref"), html.Td(road_record["road_ref"])]))
+    if road_record.get("unra_class"):
+        info_rows.append(html.Tr([html.Td("UNRA Class"), html.Td(road_record["unra_class"])]))
+    else:
+        info_rows.append(html.Tr([html.Td("Road Class"), html.Td(road_record["highway_class"].replace("_", " ").title())]))
+    info_rows.append(html.Tr([html.Td("Surface"), html.Td(road_record["surface"] or "unknown")]))
+    if road_record.get("unra_station"):
+        info_rows.append(html.Tr([html.Td("Station"), html.Td(road_record["unra_station"])]))
+    if road_record.get("segment_count", 0) > 1:
+        info_rows.append(html.Tr([html.Td("Segments"), html.Td(f"{road_data['segment_count']}")]))
     # Enriched data rows (shown when enrichment pipeline has been run)
     if road_record.get("surface_predicted"):
         info_rows.append(html.Tr([html.Td("Predicted Surface"), html.Td(road_record["surface_predicted"])]))
@@ -858,14 +866,17 @@ def _build_segments_from_geometries(road_record: dict) -> list[dict]:
             _haversine_pair(coords[j], coords[j + 1])
             for j in range(len(coords) - 1)
         ) if len(coords) > 1 else 0.0
+        osm_ids = road_record.get("osm_ids", [])
         segments.append({
-            "osm_id": road_record["osm_ids"][i] if i < len(road_record["osm_ids"]) else "",
+            "osm_id": osm_ids[i] if i < len(osm_ids) else road_record.get("id", ""),
             "name": road_record["name"],
-            "highway_type": road_record["highway_class"],
+            "highway_type": road_record.get("unra_class_raw") or road_record["highway_class"],
             "surface": road_record["surface"] or "unknown",
-            "width": road_record["width"] or "unknown",
-            "lanes": road_record["lanes"] or "unknown",
+            "width": road_record.get("width") or "N/A",
+            "lanes": road_record.get("lanes") or "N/A",
+            "road_ref": road_record.get("road_ref", ""),
             "coordinates": coords,
+            "geometry": geom,
             "length_km": round(length, 3),
         })
     return segments

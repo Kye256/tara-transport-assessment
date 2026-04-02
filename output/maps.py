@@ -82,7 +82,7 @@ def create_road_map(
 def _build_road_segments(
     road_data: dict, condition_data: Optional[list] = None
 ) -> list:
-    """Build dash-leaflet Polyline components for road segments."""
+    """Build dash-leaflet GeoJSON components for road segments."""
     layers = []
 
     for i, segment in enumerate(road_data.get("segments", [])):
@@ -96,29 +96,53 @@ def _build_road_segments(
         else:
             color = _surface_color(segment.get("surface", "unknown"))
 
-        # Convert coords to [lat, lng] format for dash-leaflet
-        positions = [[c[0], c[1]] for c in coords]
-
         tooltip_text = f"{segment.get('name', 'Road')} ({segment.get('length_km', 0)} km)"
 
-        popup_html = (
-            f"<b>{segment.get('name', 'Unnamed')}</b><br>"
-            f"Length: {segment.get('length_km', 0)} km<br>"
-            f"Surface: {segment.get('surface', 'unknown')}<br>"
-            f"Type: {segment.get('highway_type', 'unknown')}<br>"
-            f"Width: {segment.get('width', 'unknown')}<br>"
-            f"Lanes: {segment.get('lanes', 'unknown')}"
-        )
-
+        popup_parts = [
+            f"<b>{segment.get('name', 'Unnamed')}</b><br>",
+            f"Length: {segment.get('length_km', 0)} km<br>",
+            f"Surface: {segment.get('surface', 'unknown')}<br>",
+        ]
+        if segment.get("road_ref"):
+            popup_parts.append(f"Road Ref: {segment['road_ref']}<br>")
+        popup_parts.append(f"Type: {segment.get('highway_type', 'unknown')}<br>")
+        width = segment.get("width", "unknown")
+        if width and width not in ("unknown", "N/A", "None"):
+            popup_parts.append(f"Width: {width}<br>")
+        lanes = segment.get("lanes", "unknown")
+        if lanes and lanes not in ("unknown", "N/A", "None"):
+            popup_parts.append(f"Lanes: {lanes}")
         if segment.get("bridge") == "yes":
-            popup_html += "<br><b>Bridge</b>"
+            popup_parts.append("<br><b>Bridge</b>")
+        popup_html = "".join(popup_parts)
+
+        # Use original GeoJSON geometry if available, otherwise rebuild from coords
+        geom = segment.get("geometry")
+        if not geom:
+            geom = {
+                "type": "LineString",
+                "coordinates": [[c[1], c[0]] for c in coords],
+            }
+
+        feature_collection = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": geom,
+                "properties": {
+                    "name": segment.get("name", "Road"),
+                    "tooltip": tooltip_text,
+                    "popup": popup_html,
+                },
+            }],
+        }
+
+        style = {"color": color, "weight": 5, "opacity": 0.8}
 
         layers.append(
-            dl.Polyline(
-                positions=positions,
-                color=color,
-                weight=5,
-                opacity=0.8,
+            dl.GeoJSON(
+                data=feature_collection,
+                style=style,
                 children=[
                     dl.Tooltip(tooltip_text),
                     dl.Popup(popup_html),
@@ -362,9 +386,11 @@ def _surface_color(surface: str) -> str:
     surface_colors = {
         "asphalt": "#2d5f4a",
         "paved": "#2d5f4a",
+        "bituminous": "#2d5f4a",
         "concrete": "#1a3a2a",
         "gravel": "#9a6b2f",
         "unpaved": "#9a6b2f",
+        "unsealed": "#9a6b2f",
         "compacted": "#d4920b",
         "dirt": "#a83a2f",
         "earth": "#a83a2f",

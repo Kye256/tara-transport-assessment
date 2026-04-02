@@ -1,78 +1,145 @@
 """
-TARA OSM Facilities Skill
-Finds health facilities, schools, markets, and other amenities near a road corridor.
-Uses the Overpass API.
+TARA Facility Data
+Finds health facilities, schools, markets, and water points near a road corridor.
+
+Facilities loaded from local GeoJSON files at startup.
+Overpass API removed — see TARA Data Pipeline Plan.
+Sources:
+  Health:  gis_osm_pois_free_1.shp (Geofabrik OSM Uganda, 2026-03-31)
+  Schools: gis_osm_pois_free_1.shp (Geofabrik OSM Uganda, 2026-03-31)
+  Markets: Trading_Centres_UBOS.shp (UBOS, 2018)
+  Water:   gis_osm_pois_free_1.shp (Geofabrik OSM Uganda, 2026-03-31)
 """
 
-import requests
+import json
 import math
-import time
+import os
 import logging
 from typing import Optional
 
-
 logger = logging.getLogger(__name__)
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-
-# Facility categories and their OSM tags
+# Facility categories and their display config (imported by output/maps.py)
 FACILITY_CATEGORIES = {
     "health": {
-        "tags": [
-            '["amenity"="hospital"]',
-            '["amenity"="clinic"]',
-            '["amenity"="doctors"]',
-            '["amenity"="health_post"]',
-            '["healthcare"]',
-        ],
+        "tags": [],  # retained for compatibility
         "icon": "🏥",
         "color": "red",
     },
     "education": {
-        "tags": [
-            '["amenity"="school"]',
-            '["amenity"="university"]',
-            '["amenity"="college"]',
-            '["amenity"="kindergarten"]',
-        ],
+        "tags": [],
         "icon": "🏫",
         "color": "blue",
     },
     "market": {
-        "tags": [
-            '["amenity"="marketplace"]',
-            '["shop"="supermarket"]',
-            '["amenity"="market"]',
-        ],
+        "tags": [],
         "icon": "🏪",
         "color": "green",
     },
     "water": {
-        "tags": [
-            '["amenity"="drinking_water"]',
-            '["man_made"="water_well"]',
-            '["amenity"="water_point"]',
-        ],
+        "tags": [],
         "icon": "💧",
         "color": "cyan",
     },
     "transport": {
-        "tags": [
-            '["amenity"="bus_station"]',
-            '["highway"="bus_stop"]',
-            '["amenity"="fuel"]',
-        ],
+        "tags": [],
         "icon": "🚌",
         "color": "orange",
     },
     "worship": {
-        "tags": [
-            '["amenity"="place_of_worship"]',
-        ],
+        "tags": [],
         "icon": "⛪",
         "color": "purple",
     },
 }
+
+# ---------------------------------------------------------------------------
+# Load local facility data at module import time
+# ---------------------------------------------------------------------------
+
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+
+_FACILITY_FILES = {
+    "health": os.path.join(_DATA_DIR, "uganda_health_facilities.geojson"),
+    "education": os.path.join(_DATA_DIR, "uganda_schools.geojson"),
+    "market": os.path.join(_DATA_DIR, "uganda_markets.geojson"),
+    "water": os.path.join(_DATA_DIR, "uganda_water_points.geojson"),
+}
+
+# In-memory cache: category -> list of {"lat": ..., "lon": ..., "name": ..., ...}
+_FACILITIES: dict[str, list[dict]] = {}
+
+
+def _load_facilities() -> None:
+    """Load all facility GeoJSON files into memory at startup."""
+    for category, path in _FACILITY_FILES.items():
+        if not os.path.exists(path):
+            logger.warning(f"Facility file missing: {path} — {category} will be empty")
+            _FACILITIES[category] = []
+            continue
+
+        try:
+            with open(path) as f:
+                geojson = json.load(f)
+
+            facilities = []
+            for feat in geojson.get("features", []):
+                props = feat.get("properties", {})
+                geom = feat.get("geometry", {})
+                coords = geom.get("coordinates", [])
+                if not coords or len(coords) < 2:
+                    continue
+
+                lon, lat = coords[0], coords[1]
+
+                name = props.get("name") or "Unnamed"
+                fclass = props.get("fclass", "")
+
+                # Build subcategory label
+                if category == "market":
+                    subcategory = "Trading Centre"
+                else:
+                    subcategory = _fclass_to_subcategory(fclass)
+
+                facilities.append({
+                    "osm_id": props.get("osm_id", ""),
+                    "name": name,
+                    "category": category,
+                    "subcategory": subcategory,
+                    "lat": lat,
+                    "lon": lon,
+                    "tags": {k: v for k, v in props.items()
+                             if k in ("name", "fclass", "district", "population", "source")},
+                })
+
+            _FACILITIES[category] = facilities
+            logger.info(f"Loaded {len(facilities)} {category} facilities from {os.path.basename(path)}")
+
+        except Exception as e:
+            logger.warning(f"Failed to load {path}: {e} — {category} will be empty")
+            _FACILITIES[category] = []
+
+
+def _fclass_to_subcategory(fclass: str) -> str:
+    """Convert OSM fclass to a readable subcategory label."""
+    mapping = {
+        "hospital": "Hospital",
+        "clinic": "Health Clinic",
+        "doctors": "Doctor",
+        "pharmacy": "Pharmacy",
+        "school": "School",
+        "university": "University",
+        "college": "College",
+        "kindergarten": "Kindergarten",
+        "drinking_water": "Water Point",
+        "water_well": "Water Well",
+        "water_tower": "Water Tower",
+    }
+    return mapping.get(fclass, fclass.replace("_", " ").title())
+
+
+# Load on import
+_load_facilities()
 
 
 def find_facilities(
@@ -82,13 +149,13 @@ def find_facilities(
     timeout: int = 30,
 ) -> dict:
     """
-    Find facilities near a road corridor.
+    Find facilities near a road corridor using local data.
 
     Args:
         bbox: Bounding box dict with south, north, west, east
         buffer_km: Buffer distance around corridor in km (default 5km)
         categories: List of categories to search (default: all)
-        timeout: API timeout in seconds
+        timeout: Ignored (kept for API compatibility)
 
     Returns:
         dict with facilities grouped by category
@@ -97,108 +164,30 @@ def find_facilities(
         return {"facilities": {}, "total_count": 0}
 
     # Expand bbox by buffer
-    lat_buffer = buffer_km / 111.0  # ~111km per degree latitude
+    lat_buffer = buffer_km / 111.0
     lon_buffer = buffer_km / (111.0 * math.cos(math.radians((bbox["south"] + bbox["north"]) / 2)))
 
-    expanded_bbox = (
-        bbox["south"] - lat_buffer,
-        bbox["west"] - lon_buffer,
-        bbox["north"] + lat_buffer,
-        bbox["east"] + lon_buffer,
-    )
-    bbox_str = f"{expanded_bbox[0]},{expanded_bbox[1]},{expanded_bbox[2]},{expanded_bbox[3]}"
+    south = bbox["south"] - lat_buffer
+    west = bbox["west"] - lon_buffer
+    north = bbox["north"] + lat_buffer
+    east = bbox["east"] + lon_buffer
 
     # Select categories
     if categories is None:
         categories = list(FACILITY_CATEGORIES.keys())
 
-    # Build single query for all facility types
-    tag_queries = []
+    facilities = {}
     for cat in categories:
-        if cat in FACILITY_CATEGORIES:
-            for tag in FACILITY_CATEGORIES[cat]["tags"]:
-                tag_queries.append(f'  node{tag}({bbox_str});')
-                tag_queries.append(f'  way{tag}({bbox_str});')
-
-    query = f"""
-    [out:json][timeout:{timeout}];
-    (
-    {chr(10).join(tag_queries)}
-    );
-    out center;
-    """
-
-    # Retry with exponential backoff: 3 attempts with 2s, 4s, 8s delays
-    max_attempts = 3
-    backoff_delays = [2, 4, 8]
-    data = None
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = requests.post(
-                OVERPASS_URL,
-                data={"data": query},
-                timeout=timeout,
-                headers={"User-Agent": "TARA Transport Assessment Agent/1.0"}
-            )
-            response.raise_for_status()
-            data = response.json()
-            break
-        except requests.exceptions.RequestException as e:
-            if attempt < max_attempts:
-                delay = backoff_delays[attempt - 1]
-                logger.warning(
-                    f"Overpass API error on attempt {attempt}/{max_attempts}: {e}. "
-                    f"Retrying in {delay}s..."
-                )
-                time.sleep(delay)
-            else:
-                logger.warning(
-                    f"Overpass API error on attempt {attempt}/{max_attempts}: {e}. "
-                    f"All {max_attempts} attempts failed."
-                )
-                return {"facilities": {cat: [] for cat in categories}, "total_count": 0}
-
-    # Process results
-    facilities = {cat: [] for cat in categories}
-    seen_ids = set()
-
-    for element in data.get("elements", []):
-        element_id = element["id"]
-        if element_id in seen_ids:
-            continue
-        seen_ids.add(element_id)
-
-        tags = element.get("tags", {})
-
-        # Get coordinates (node has lat/lon directly, way has center)
-        if element["type"] == "node":
-            lat = element.get("lat")
-            lon = element.get("lon")
-        else:
-            center = element.get("center", {})
-            lat = center.get("lat")
-            lon = center.get("lon")
-
-        if not lat or not lon:
+        if cat not in _FACILITIES:
+            facilities[cat] = []
             continue
 
-        # Categorize the facility
-        category = _categorize_facility(tags)
-        if category and category in facilities:
-            facility = {
-                "osm_id": element_id,
-                "name": tags.get("name", "Unnamed"),
-                "category": category,
-                "subcategory": _get_subcategory(tags),
-                "lat": lat,
-                "lon": lon,
-                "tags": {k: v for k, v in tags.items() if k in [
-                    "name", "amenity", "healthcare", "shop", "highway",
-                    "operator", "addr:city", "phone", "opening_hours"
-                ]},
-            }
-            facilities[category].append(facility)
+        # Filter by expanded bbox
+        filtered = []
+        for f in _FACILITIES.get(cat, []):
+            if south <= f["lat"] <= north and west <= f["lon"] <= east:
+                filtered.append(f)
+        facilities[cat] = filtered
 
     total = sum(len(v) for v in facilities.values())
 
@@ -206,68 +195,14 @@ def find_facilities(
         "facilities": facilities,
         "total_count": total,
         "bbox_searched": {
-            "south": expanded_bbox[0],
-            "west": expanded_bbox[1],
-            "north": expanded_bbox[2],
-            "east": expanded_bbox[3],
+            "south": south,
+            "west": west,
+            "north": north,
+            "east": east,
         },
         "buffer_km": buffer_km,
         "categories_searched": categories,
     }
-
-
-def _categorize_facility(tags: dict) -> Optional[str]:
-    """Determine which category a facility belongs to."""
-    amenity = tags.get("amenity", "")
-    healthcare = tags.get("healthcare", "")
-    shop = tags.get("shop", "")
-    highway = tags.get("highway", "")
-    man_made = tags.get("man_made", "")
-
-    if amenity in ["hospital", "clinic", "doctors", "health_post"] or healthcare:
-        return "health"
-    elif amenity in ["school", "university", "college", "kindergarten"]:
-        return "education"
-    elif amenity in ["marketplace", "market"] or shop == "supermarket":
-        return "market"
-    elif amenity in ["drinking_water", "water_point"] or man_made == "water_well":
-        return "water"
-    elif amenity in ["bus_station", "fuel"] or highway == "bus_stop":
-        return "transport"
-    elif amenity == "place_of_worship":
-        return "worship"
-
-    return None
-
-
-def _get_subcategory(tags: dict) -> str:
-    """Get a more specific subcategory label."""
-    amenity = tags.get("amenity", "")
-    healthcare = tags.get("healthcare", "")
-
-    subcategory_map = {
-        "hospital": "Hospital",
-        "clinic": "Health Clinic",
-        "doctors": "Doctor",
-        "health_post": "Health Post",
-        "school": "School",
-        "university": "University",
-        "college": "College",
-        "kindergarten": "Kindergarten",
-        "marketplace": "Market",
-        "market": "Market",
-        "bus_station": "Bus Station",
-        "fuel": "Fuel Station",
-        "bus_stop": "Bus Stop",
-        "place_of_worship": "Place of Worship",
-        "drinking_water": "Water Point",
-        "water_point": "Water Point",
-    }
-
-    if healthcare:
-        return healthcare.replace("_", " ").title()
-
-    return subcategory_map.get(amenity, amenity.replace("_", " ").title())
 
 
 def get_facilities_summary(facilities_data: dict) -> str:
@@ -324,14 +259,17 @@ def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 # Quick test
 if __name__ == "__main__":
-    # Test with Kasangati-Matugga approximate bbox
     test_bbox = {
         "south": 0.38,
-        "north": 0.42,
-        "west": 32.55,
+        "north": 0.46,
+        "west": 32.52,
         "east": 32.62,
     }
 
-    print("Searching for facilities near Kasangati-Matugga corridor...")
+    print("Searching for facilities near Matugga-Kasangati corridor...")
     result = find_facilities(test_bbox, buffer_km=3.0)
     print(get_facilities_summary(result))
+
+    print(f"\nBreakdown:")
+    for cat, items in result["facilities"].items():
+        print(f"  {cat}: {len(items)}")
