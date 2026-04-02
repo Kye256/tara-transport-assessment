@@ -191,7 +191,7 @@ def _poverty_impact_index(
         poor_population = 10_000 * poverty_ratio
     else:
         poverty_est = population_data.get("poverty_estimate", {})
-        poverty_ratio = poverty_est.get("poverty_ratio", POVERTY_HEADCOUNT_RATIO.get(classification, 0.21))
+        poverty_ratio = poverty_est.get("headcount_ratio", POVERTY_HEADCOUNT_RATIO.get(classification, 0.21))
         poor_population = poverty_est.get("population_in_poverty", 0)
 
     # Poverty ratio score (higher poverty = higher equity need)

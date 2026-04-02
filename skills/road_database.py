@@ -252,7 +252,8 @@ def search_roads(query: str, limit: int = 50) -> list[dict]:
             contains.append(road)
 
     # Multi-word: check if all words appear in the name
-    words = [w for w in query_lower.replace("-", " ").split() if len(w) > 2]
+    _NOISE = {"road", "highway", "street", "route", "the"}
+    words = [w for w in query_lower.replace("-", " ").split() if len(w) > 2 and w not in _NOISE]
     if len(words) > 1:
         seen_ids = {r["id"] for r in exact + starts + contains}
         for road in network["roads"]:

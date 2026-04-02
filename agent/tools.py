@@ -426,22 +426,78 @@ def execute_tool(tool_name: str, tool_input: dict) -> dict[str, Any]:
 
 def _exec_search_road(tool_input: dict) -> dict:
     road_name = tool_input["road_name"]
-    country = tool_input.get("country", "Uganda")
 
-    road_data = search_road(road_name, country)
+    from skills.road_database import search_roads, get_road_by_id
 
-    if not road_data.get("found"):
+    matches = search_roads(road_name, limit=10)
+    if not matches:
         return {
-            "result": road_data,
-            "summary": f"Could not find '{road_name}' on OpenStreetMap. Try a more specific name.",
+            "result": {"found": False, "road_name": road_name},
+            "summary": f"Could not find '{road_name}' in the local UNRA database. "
+                       f"Try a different name or road reference (e.g. 'A109', 'C194').",
         }
 
-    summary = get_road_summary(road_data)
+    # Use the top match
+    best = matches[0]
+    road_record = get_road_by_id(best["id"])
+    if not road_record:
+        return {
+            "result": {"found": False, "road_name": road_name},
+            "summary": f"Road '{best['name']}' found in index but could not load geometry.",
+        }
+
+    # Build road_data in the format expected by all downstream consumers
+    surface_types = [s.strip() for s in (road_record["surface"] or "unknown").split(",")]
+    road_data = {
+        "road_name": road_record["name"],
+        "name": road_record["name"],
+        "found": True,
+        "source": "unra_local",
+        "total_length_km": road_record["length_km"],
+        "segment_count": road_record["segment_count"],
+        "center": road_record["center"],
+        "bbox": road_record["bbox"],
+        "attributes": {
+            "surface_types": surface_types,
+            "highway_types": [road_record.get("unra_class_raw") or road_record["highway_class"]],
+            "avg_width_m": None,
+            "lanes": [road_record["lanes"]] if road_record.get("lanes") else [],
+            "names_found": [road_record["name"]],
+        },
+        "segments": [{
+            "osm_id": road_record["id"],
+            "name": road_record["name"],
+            "highway_type": road_record.get("unra_class_raw") or road_record["highway_class"],
+            "surface": road_record["surface"] or "unknown",
+            "width": "unknown",
+            "lanes": road_record.get("lanes") or "unknown",
+            "length_km": road_record["length_km"],
+            "coordinates": road_record["coordinates"],
+        }],
+        "coordinates_all": road_record["coordinates"],
+    }
+
+    # List other matches for the agent's awareness
+    other_matches = ""
+    if len(matches) > 1:
+        others = [f"  - {m['name']} ({m['length_km']}km)" for m in matches[1:5]]
+        other_matches = "\nOther matches:\n" + "\n".join(others)
+
+    summary = (
+        f"**{road_record['name']}**\n"
+        f"- Total length: {road_record['length_km']} km\n"
+        f"- Surface: {road_record['surface'] or 'unknown'}\n"
+        f"- Road class: {road_record.get('unra_class') or road_record['highway_class']}\n"
+        f"- Road ref: {road_record.get('road_ref') or 'N/A'}\n"
+        f"- Source: Local UNRA database"
+        f"{other_matches}"
+    )
+
     return {
         "result": road_data,
-        "summary": f"Found {road_name}: {road_data['total_length_km']}km, "
-                   f"{road_data['segment_count']} segments.\n{summary}",
-        "_road_data": road_data,  # For internal use by orchestrator
+        "summary": f"Found {road_record['name']}: {road_record['length_km']}km, "
+                   f"{road_record['segment_count']} segment(s).\n{summary}",
+        "_road_data": road_data,
     }
 
 
