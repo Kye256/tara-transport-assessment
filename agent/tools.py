@@ -9,7 +9,7 @@ from typing import Any
 
 from skills.osm_lookup import search_road, get_road_summary
 from skills.osm_facilities import find_facilities, get_facilities_summary, calculate_distances_to_road
-from skills.worldpop import get_population, get_population_summary
+from skills.population import get_population, get_population_summary
 from skills.dashcam import analyze_dashcam_media, get_dashcam_summary
 from output.maps import create_road_map
 from engine.traffic import forecast_traffic

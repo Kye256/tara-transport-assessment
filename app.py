@@ -1713,13 +1713,10 @@ def run_cba_callback(
             no_update, no_update, no_update, no_update, no_update,
         )
 
-    # Population — prefer Kontur (local, fast) over WorldPop (API, slow)
+    # Population — Kontur H3 hexagons with area-weighted spatial join
     pop_data = None
     try:
-        try:
-            from skills.kontur_population import get_population
-        except ImportError:
-            from skills.worldpop import get_population
+        from skills.population import get_population
         if road_data and road_data.get("found"):
             pop_data = get_population(
                 road_data.get("bbox", {}),
