@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TARA — Demo Presentation</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Libre+Franklin:wght@400;600;700;900&family=Source+Sans+3:wght@300;400;600&display=swap"
+    rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #f7f6f3;
+      overflow: hidden;
+      cursor: none;
+    }
+
+    .slide {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+
+    .slide.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* ====== SLIDE 1: THE STAKES ====== */
+    .slide-1 {
+      background: #1a2e23;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 80px;
+    }
+
+    .slide-1 .big-number {
+      font-family: 'DM Mono', monospace;
+      font-size: 120px;
+      font-weight: 500;
+      color: #4aba8a;
+      letter-spacing: -3px;
+      line-height: 1;
+      margin-bottom: 16px;
+    }
+
+    .slide-1 .big-label {
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 28px;
+      font-weight: 300;
+      color: #a8c4b4;
+      margin-bottom: 60px;
+      letter-spacing: 0.5px;
+    }
+
+    .slide-1 .stat-row {
+      display: flex;
+      gap: 80px;
+      margin-top: 20px;
+    }
+
+    .slide-1 .stat {
+      text-align: center;
+    }
+
+    .slide-1 .stat-number {
+      font-family: 'DM Mono', monospace;
+      font-size: 56px;
+      font-weight: 500;
+      color: #ffffff;
+      line-height: 1;
+    }
+
+    .slide-1 .stat-unit {
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 18px;
+      color: #6b9b84;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+
+    .slide-1 .source {
+      position: absolute;
+      bottom: 40px;
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: #3a5c4a;
+      letter-spacing: 0.5px;
+    }
+
+    /* ====== SLIDE 2: THE BOTTLENECK ====== */
+    .slide-2 {
+      background: #f7f6f3;
+      flex-direction: column;
+      justify-content: center;
+      padding: 80px 120px;
+    }
+
+    .slide-2 .quote {
+      font-family: 'Libre Franklin', sans-serif;
+      font-size: 48px;
+      font-weight: 700;
+      color: #2c2a26;
+      line-height: 1.3;
+      max-width: 900px;
+      margin-bottom: 40px;
+    }
+
+    .slide-2 .quote em {
+      color: #a83a2f;
+      font-style: normal;
+    }
+
+    .slide-2 .bottleneck-items {
+      display: flex;
+      gap: 48px;
+      margin-top: 20px;
+    }
+
+    .slide-2 .bottleneck-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .slide-2 .bottleneck-icon {
+      width: 48px;
+      height: 48px;
+      background: #2d5f4a;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      flex-shrink: 0;
+    }
+
+    .slide-2 .bottleneck-text {
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 18px;
+      color: #5c5950;
+      line-height: 1.5;
+      max-width: 280px;
+    }
+
+    .slide-2 .bottleneck-text strong {
+      color: #2c2a26;
+      font-weight: 600;
+    }
+
+    /* ====== SLIDE 3: THE MISSING PIECE ====== */
+    .slide-3 {
+      background: #1a2e23;
+      flex-direction: row;
+    }
+
+    .slide-3 .left {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 80px;
+    }
+
+    .slide-3 .right {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 80px;
+      border-left: 1px solid #2d5f4a;
+    }
+
+    .slide-3 .column-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 24px;
+    }
+
+    .slide-3 .left .column-label {
+      color: #6b9b84;
+    }
+
+    .slide-3 .right .column-label {
+      color: #4aba8a;
+    }
+
+    .slide-3 .column-title {
+      font-family: 'Libre Franklin', sans-serif;
+      font-size: 36px;
+      font-weight: 700;
+      line-height: 1.3;
+      margin-bottom: 24px;
+    }
+
+    .slide-3 .left .column-title {
+      color: #a8c4b4;
+    }
+
+    .slide-3 .right .column-title {
+      color: #ffffff;
+    }
+
+    .slide-3 .column-body {
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 20px;
+      line-height: 1.6;
+    }
+
+    .slide-3 .left .column-body {
+      color: #6b9b84;
+    }
+
+    .slide-3 .right .column-body {
+      color: #a8c4b4;
+    }
+
+    .slide-3 .right .column-body strong {
+      color: #4aba8a;
+      font-weight: 600;
+    }
+
+    .slide-3 .person-list {
+      margin-top: 20px;
+      list-style: none;
+    }
+
+    .slide-3 .person-list li {
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 18px;
+      color: #a8c4b4;
+      padding: 8px 0;
+      border-bottom: 1px solid #243d30;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .slide-3 .person-list li span.icon {
+      font-size: 20px;
+    }
+
+    /* ====== SLIDE 4: TARA INTRO ====== */
+    .slide-4 {
+      background: #f7f6f3;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 80px;
+    }
+
+    .slide-4 .tara-name {
+      font-family: 'Libre Franklin', sans-serif;
+      font-size: 96px;
+      font-weight: 900;
+      color: #2d5f4a;
+      letter-spacing: -2px;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+
+    .slide-4 .tara-full {
+      font-family: 'DM Mono', monospace;
+      font-size: 16px;
+      color: #8a8578;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-bottom: 48px;
+    }
+
+    .slide-4 .tagline {
+      font-family: 'Libre Franklin', sans-serif;
+      font-size: 36px;
+      font-weight: 700;
+      color: #2c2a26;
+      line-height: 1.3;
+      max-width: 700px;
+      margin-bottom: 48px;
+    }
+
+    .slide-4 .how-it-works {
+      display: flex;
+      gap: 24px;
+      align-items: center;
+    }
+
+    .slide-4 .step-pill {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: white;
+      border: 2px solid #2d5f4a;
+      border-radius: 3px;
+      padding: 14px 24px;
+    }
+
+    .slide-4 .step-pill .step-icon {
+      font-size: 24px;
+    }
+
+    .slide-4 .step-pill .step-text {
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 16px;
+      font-weight: 600;
+      color: #2c2a26;
+    }
+
+    .slide-4 .arrow {
+      font-family: 'DM Mono', monospace;
+      font-size: 24px;
+      color: #2d5f4a;
+    }
+
+    .slide-4 .powered-by {
+      position: absolute;
+      bottom: 40px;
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: #8a8578;
+      letter-spacing: 0.5px;
+    }
+
+    .slide-4 .powered-by strong {
+      color: #2d5f4a;
+    }
+
+    /* ====== SLIDE 5: CLOSING (after demo) ====== */
+    .slide-5 {
+      background: #1a2e23;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 80px;
+    }
+
+    .slide-5 .closing-stat {
+      display: flex;
+      gap: 16px;
+      align-items: baseline;
+      margin-bottom: 48px;
+    }
+
+    .slide-5 .old {
+      font-family: 'DM Mono', monospace;
+      font-size: 64px;
+      color: #a83a2f;
+      text-decoration: line-through;
+      opacity: 0.6;
+    }
+
+    .slide-5 .arrow-right {
+      font-family: 'DM Mono', monospace;
+      font-size: 48px;
+      color: #6b9b84;
+    }
+
+    .slide-5 .new {
+      font-family: 'DM Mono', monospace;
+      font-size: 80px;
+      color: #4aba8a;
+      font-weight: 500;
+    }
+
+    .slide-5 .closing-label {
+      font-family: 'Source Sans 3', sans-serif;
+      font-size: 18px;
+      color: #6b9b84;
+      margin-top: -32px;
+      margin-bottom: 56px;
+    }
+
+    .slide-5 .closing-quote {
+      font-family: 'Libre Franklin', sans-serif;
+      font-size: 32px;
+      font-weight: 600;
+      color: #ffffff;
+      line-height: 1.4;
+      max-width: 800px;
+      margin-bottom: 56px;
+    }
+
+    .slide-5 .closing-quote em {
+      color: #4aba8a;
+      font-style: normal;
+    }
+
+    .slide-5 .badges {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+
+    .slide-5 .badge {
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      color: #a8c4b4;
+      padding: 10px 20px;
+      border: 1px solid #3a5c4a;
+      border-radius: 3px;
+      letter-spacing: 0.5px;
+    }
+
+    .slide-5 .badge.highlight {
+      border-color: #4aba8a;
+      color: #4aba8a;
+    }
+
+    /* ====== NAVIGATION ====== */
+    .nav-hint {
+      position: fixed;
+      bottom: 16px;
+      right: 24px;
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: #aaa59c;
+      letter-spacing: 0.5px;
+      z-index: 100;
+      opacity: 0.5;
+    }
+
+    .slide-counter {
+      position: fixed;
+      bottom: 16px;
+      left: 24px;
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: #aaa59c;
+      z-index: 100;
+      opacity: 0.5;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- SLIDE 1: THE STAKES -->
+  <div class="slide slide-1 active" data-slide="1">
+    <div class="big-number">$181B</div>
+    <div class="big-label">needed every year for African transport infrastructure</div>
+    <div class="stat-row">
+      <div class="stat">
+        <div class="stat-number">80%</div>
+        <div class="stat-unit">of projects fail at<br>feasibility stage</div>
+      </div>
+      <div class="stat">
+        <div class="stat-number">4%</div>
+        <div class="stat-unit">of GDP invested vs<br>China's 14%</div>
+      </div>
+      <div class="stat">
+        <div class="stat-number">50%</div>
+        <div class="stat-unit">of infrastructure spend<br>wasted in LICs</div>
+      </div>
+    </div>
+    <div class="source">Sources: African Development Bank, IMF Infrastructure Governance, ICA Infrastructure Financing
+      Trends</div>
+  </div>
+
+  <!-- SLIDE 2: THE BOTTLENECK -->
+  <div class="slide slide-2" data-slide="2">
+    <div class="quote">It's not money.<br>It's <em>project preparation</em>.</div>
+    <div class="bottleneck-items">
+      <div class="bottleneck-item">
+        <div class="bottleneck-icon">📅</div>
+        <div class="bottleneck-text"><strong>5 weeks</strong> to appraise a single road using traditional methods and
+          specialist software</div>
+      </div>
+      <div class="bottleneck-item">
+        <div class="bottleneck-icon">💰</div>
+        <div class="bottleneck-text"><strong>$50,000+</strong> per HDM-4 licence. Most road agencies can't afford the
+          tools</div>
+      </div>
+      <div class="bottleneck-item">
+        <div class="bottleneck-icon">👤</div>
+        <div class="bottleneck-text"><strong>Specialist shortage.</strong> The experts who can run appraisals are
+          overwhelmed</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 3: THE MISSING PIECE -->
+  <div class="slide slide-3" data-slide="3">
+    <div class="left">
+      <div class="column-label">What appraisal does today</div>
+      <div class="column-title">Calculates economic returns</div>
+      <div class="column-body">NPV, EIRR, BCR — numbers on a spreadsheet. Inputs go in, numbers come out. The road is
+        treated as an asset, not a lifeline.</div>
+    </div>
+    <div class="right">
+      <div class="column-label">What appraisal should ask</div>
+      <div class="column-title">Who benefits?</div>
+      <div class="column-body">The people who <strong>depend</strong> on this road are invisible in traditional
+        appraisal:</div>
+      <ul class="person-list">
+        <li><span class="icon">🚶</span> Pedestrians with no footpath</li>
+        <li><span class="icon">👧</span> School children on the carriageway</li>
+        <li><span class="icon">🏪</span> Trading centres that are commercial lifelines</li>
+        <li><span class="icon">🏥</span> Communities hours from healthcare</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- SLIDE 4: TARA INTRO -->
+  <div class="slide slide-4" data-slide="4">
+    <div class="tara-name">TARA</div>
+    <div class="tara-full">Transport Appraisal & Risk Analysis</div>
+    <div class="tagline">Drive any road.<br>Get a complete investment appraisal.</div>
+    <div class="how-it-works">
+      <div class="step-pill">
+        <span class="step-icon">📹</span>
+        <span class="step-text">Upload dashcam</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="step-pill">
+        <span class="step-icon">🔬</span>
+        <span class="step-text">AI analyses every frame</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="step-pill">
+        <span class="step-icon">📊</span>
+        <span class="step-text">Full economic appraisal</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="step-pill">
+        <span class="step-icon">👥</span>
+        <span class="step-text">Equity assessment</span>
+      </div>
+    </div>
+    <div class="powered-by">Built with <strong>Claude Opus 4.6</strong> · Anthropic Claude Code Hackathon 2026</div>
+  </div>
+
+  <!-- SLIDE 5: CLOSING (shown after demo) -->
+  <div class="slide slide-5" data-slide="5">
+    <div class="closing-stat">
+      <span class="old">5 weeks</span>
+      <span class="arrow-right">→</span>
+      <span class="new">5 hours</span>
+    </div>
+    <div class="closing-label">from dashcam footage to investment decision</div>
+    <div class="closing-quote">TARA sees the road.<br>But more importantly, it sees <em>the people who depend on
+        it</em>.</div>
+    <div class="badges">
+      <div class="badge highlight">Open Source</div>
+      <div class="badge">Claude Opus 4.6 Vision</div>
+      <div class="badge">Real Road · Real Data · Uganda</div>
+      <div class="badge highlight">One person + Claude · 6 days</div>
+    </div>
+  </div>
+
+  <!-- Navigation -->
+  <div class="slide-counter" id="counter">1 / 5</div>
+  <div class="nav-hint">← → or click to navigate</div>
+
+  <script>
+    let current = 1;
+    const total = 5;
+
+    function goTo(n) {
+      if (n < 1 || n > total) return;
+      document.querySelector('.slide.active').classList.remove('active');
+      document.querySelector(`[data-slide="${n}"]`).classList.add('active');
+      current = n;
+      document.getElementById('counter').textContent = `${current} / ${total}`;
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        goTo(current + 1);
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
+        e.preventDefault();
+        goTo(current - 1);
+      }
+      // Number keys jump to slide
+      const num = parseInt(e.key);
+      if (num >= 1 && num <= total) goTo(num);
+    });
+
+    // Click right half = next, left half = prev
+    document.addEventListener('click', (e) => {
+      if (e.clientX > window.innerWidth / 2) {
+        goTo(current + 1);
+      } else {
+        goTo(current - 1);
+      }
+    });
+
+    // Hide cursor after 2s of no movement
+    let cursorTimer;
+    document.addEventListener('mousemove', () => {
+      document.body.style.cursor = 'default';
+      clearTimeout(cursorTimer);
+      cursorTimer = setTimeout(() => {
+        document.body.style.cursor = 'none';
+      }, 2000);
+    });
+  </script>
+
+</body>
+
+</html>

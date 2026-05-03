@@ -9,6 +9,7 @@ from typing import Any
 
 from skills.osm_lookup import search_road, get_road_summary
 from skills.osm_facilities import find_facilities, get_facilities_summary, calculate_distances_to_road
+from skills.worldpop import get_population, get_population_summary
 from skills.dashcam import analyze_dashcam_media, get_dashcam_summary
 from output.maps import create_road_map
 from engine.traffic import forecast_traffic
@@ -251,10 +252,57 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "get_population",
+        "description": (
+            "Get population data for a road corridor from WorldPop. Returns population counts "
+            "within 2km, 5km, and 10km buffer zones, population density, area classification "
+            "(rural/peri-urban/urban), and poverty estimates. Requires a bounding box; optionally "
+            "accepts road coordinates for a more accurate corridor polygon."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bbox": {
+                    "type": "object",
+                    "description": "Bounding box with south, north, west, east coordinates",
+                    "properties": {
+                        "south": {"type": "number"},
+                        "north": {"type": "number"},
+                        "west": {"type": "number"},
+                        "east": {"type": "number"},
+                    },
+                    "required": ["south", "north", "west", "east"],
+                },
+                "road_coordinates": {
+                    "type": "array",
+                    "description": "List of [lat, lon] coordinate pairs along the road centerline (optional, improves accuracy)",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 2,
+                        "maxItems": 2,
+                    },
+                },
+                "buffer_km": {
+                    "type": "number",
+                    "description": "Default buffer distance in km (default: 5.0)",
+                    "default": 5.0,
+                },
+                "year": {
+                    "type": "integer",
+                    "description": "WorldPop data year (default: 2020, range: 2000-2020)",
+                    "default": 2020,
+                },
+            },
+            "required": ["bbox"],
+        },
+    },
+    {
         "name": "calculate_equity",
         "description": (
-            "Calculate equity impact score for the road project. Assesses accessibility improvement "
-            "and facility access. Returns a composite score (0-100) with breakdown by index."
+            "Calculate equity impact score for the road project. Assesses accessibility improvement, "
+            "population benefit, poverty impact, and facility access. Returns a composite score (0-100) "
+            "with breakdown by index. Call this after CBA and population data are available."
         ),
         "input_schema": {
             "type": "object",
@@ -267,9 +315,13 @@ TOOL_DEFINITIONS = [
                     "type": "object",
                     "description": "Facilities data from find_facilities (optional)",
                 },
+                "population_data": {
+                    "type": "object",
+                    "description": "Population data from get_population (optional)",
+                },
                 "cba_results": {
                     "type": "object",
-                    "description": "CBA results from run_cba (optional)",
+                    "description": "CBA results from run_cba (optional, improves poverty scoring)",
                 },
             },
             "required": ["road_data"],
@@ -356,6 +408,8 @@ def execute_tool(tool_name: str, tool_input: dict) -> dict[str, Any]:
             return _exec_create_map(tool_input)
         elif tool_name == "validate_inputs":
             return _exec_validate_inputs(tool_input)
+        elif tool_name == "get_population":
+            return _exec_get_population(tool_input)
         elif tool_name == "calculate_equity":
             return _exec_calculate_equity(tool_input)
         elif tool_name == "generate_report":
@@ -372,78 +426,22 @@ def execute_tool(tool_name: str, tool_input: dict) -> dict[str, Any]:
 
 def _exec_search_road(tool_input: dict) -> dict:
     road_name = tool_input["road_name"]
+    country = tool_input.get("country", "Uganda")
 
-    from skills.road_database import search_roads, get_road_by_id
+    road_data = search_road(road_name, country)
 
-    matches = search_roads(road_name, limit=10)
-    if not matches:
+    if not road_data.get("found"):
         return {
-            "result": {"found": False, "road_name": road_name},
-            "summary": f"Could not find '{road_name}' in the local UNRA database. "
-                       f"Try a different name or road reference (e.g. 'A109', 'C194').",
+            "result": road_data,
+            "summary": f"Could not find '{road_name}' on OpenStreetMap. Try a more specific name.",
         }
 
-    # Use the top match
-    best = matches[0]
-    road_record = get_road_by_id(best["id"])
-    if not road_record:
-        return {
-            "result": {"found": False, "road_name": road_name},
-            "summary": f"Road '{best['name']}' found in index but could not load geometry.",
-        }
-
-    # Build road_data in the format expected by all downstream consumers
-    surface_types = [s.strip() for s in (road_record["surface"] or "unknown").split(",")]
-    road_data = {
-        "road_name": road_record["name"],
-        "name": road_record["name"],
-        "found": True,
-        "source": "unra_local",
-        "total_length_km": road_record["length_km"],
-        "segment_count": road_record["segment_count"],
-        "center": road_record["center"],
-        "bbox": road_record["bbox"],
-        "attributes": {
-            "surface_types": surface_types,
-            "highway_types": [road_record.get("unra_class_raw") or road_record["highway_class"]],
-            "avg_width_m": None,
-            "lanes": [road_record["lanes"]] if road_record.get("lanes") else [],
-            "names_found": [road_record["name"]],
-        },
-        "segments": [{
-            "osm_id": road_record["id"],
-            "name": road_record["name"],
-            "highway_type": road_record.get("unra_class_raw") or road_record["highway_class"],
-            "surface": road_record["surface"] or "unknown",
-            "width": "unknown",
-            "lanes": road_record.get("lanes") or "unknown",
-            "length_km": road_record["length_km"],
-            "coordinates": road_record["coordinates"],
-        }],
-        "coordinates_all": road_record["coordinates"],
-    }
-
-    # List other matches for the agent's awareness
-    other_matches = ""
-    if len(matches) > 1:
-        others = [f"  - {m['name']} ({m['length_km']}km)" for m in matches[1:5]]
-        other_matches = "\nOther matches:\n" + "\n".join(others)
-
-    summary = (
-        f"**{road_record['name']}**\n"
-        f"- Total length: {road_record['length_km']} km\n"
-        f"- Surface: {road_record['surface'] or 'unknown'}\n"
-        f"- Road class: {road_record.get('unra_class') or road_record['highway_class']}\n"
-        f"- Road ref: {road_record.get('road_ref') or 'N/A'}\n"
-        f"- Source: Local UNRA database"
-        f"{other_matches}"
-    )
-
+    summary = get_road_summary(road_data)
     return {
         "result": road_data,
-        "summary": f"Found {road_record['name']}: {road_record['length_km']}km, "
-                   f"{road_record['segment_count']} segment(s).\n{summary}",
-        "_road_data": road_data,
+        "summary": f"Found {road_name}: {road_data['total_length_km']}km, "
+                   f"{road_data['segment_count']} segments.\n{summary}",
+        "_road_data": road_data,  # For internal use by orchestrator
     }
 
 
@@ -632,15 +630,37 @@ def _exec_validate_inputs(tool_input: dict) -> dict:
     }
 
 
+def _exec_get_population(tool_input: dict) -> dict:
+    bbox = tool_input["bbox"]
+    road_coords = tool_input.get("road_coordinates")
+    buffer_km = tool_input.get("buffer_km", 5.0)
+    year = tool_input.get("year", 2020)
+
+    pop_data = get_population(
+        bbox=bbox,
+        road_coords=road_coords,
+        buffer_km=buffer_km,
+        year=year,
+    )
+
+    summary = get_population_summary(pop_data)
+    return {
+        "result": pop_data,
+        "summary": summary,
+        "_population_data": pop_data,
+    }
+
+
 def _exec_calculate_equity(tool_input: dict) -> dict:
     road_data = tool_input.get("road_data", {})
     facilities_data = tool_input.get("facilities_data")
+    population_data = tool_input.get("population_data")
     cba_results = tool_input.get("cba_results")
 
     result = calculate_equity_score(
         road_data=road_data,
         facilities_data=facilities_data,
-        population_data=None,
+        population_data=population_data,
         cba_results=cba_results,
     )
 
@@ -658,6 +678,7 @@ def _exec_generate_report(tool_input: dict) -> dict:
     # This tool uses agent state data, injected by the orchestrator
     road_data = tool_input.get("_road_data")
     facilities_data = tool_input.get("_facilities_data")
+    population_data = tool_input.get("_population_data")
     cba_results = tool_input.get("_cba_results")
     sensitivity_results = tool_input.get("_sensitivity_results")
     equity_results = tool_input.get("_equity_results")
@@ -669,7 +690,7 @@ def _exec_generate_report(tool_input: dict) -> dict:
         md = generate_report_markdown(
             road_data=road_data,
             facilities_data=facilities_data,
-            population_data=None,
+            population_data=population_data,
             cba_results=cba_results,
             sensitivity_results=sensitivity_results,
             equity_results=equity_results,
@@ -682,7 +703,7 @@ def _exec_generate_report(tool_input: dict) -> dict:
             pdf_bytes = generate_report_pdf(
                 road_data=road_data,
                 facilities_data=facilities_data,
-                population_data=None,
+                population_data=population_data,
                 cba_results=cba_results,
                 sensitivity_results=sensitivity_results,
                 equity_results=equity_results,

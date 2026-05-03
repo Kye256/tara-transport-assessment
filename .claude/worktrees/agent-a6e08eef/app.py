@@ -336,6 +336,7 @@ def build_step2():
             id="manual-condition-collapse",
             is_open=False,
         ),
+        html.Div(id="condition-warnings", className="mt-2"),
         # Hidden dashcam components (preserve IDs to avoid callback errors)
         dcc.Upload(id="dashcam-upload", style={"display": "none"}),
         html.Div(id="dashcam-result", style={"display": "none"}),
@@ -770,7 +771,7 @@ def select_road(road_id):
         "coordinates_all": road_record["coordinates"],
     }
 
-    # Load facilities from local data (wrap in try/except)
+    # Try to load facilities (uses Overpass — wrap in try/except)
     facilities_data = {"facilities": {}, "total_count": 0}
     try:
         from skills.osm_facilities import find_facilities, calculate_distances_to_road
@@ -789,18 +790,10 @@ def select_road(road_id):
     # Road info as HTML table
     info_rows = [
         html.Tr([html.Td("Length"), html.Td(f"{road_data['total_length_km']} km")]),
+        html.Tr([html.Td("Segments"), html.Td(f"{road_data['segment_count']}")]),
+        html.Tr([html.Td("Surface"), html.Td(road_record["surface"] or "unknown")]),
+        html.Tr([html.Td("Road Class"), html.Td(road_record["highway_class"].replace("_", " ").title())]),
     ]
-    if road_record.get("road_ref"):
-        info_rows.append(html.Tr([html.Td("Road Ref"), html.Td(road_record["road_ref"])]))
-    if road_record.get("unra_class"):
-        info_rows.append(html.Tr([html.Td("UNRA Class"), html.Td(road_record["unra_class"])]))
-    else:
-        info_rows.append(html.Tr([html.Td("Road Class"), html.Td(road_record["highway_class"].replace("_", " ").title())]))
-    info_rows.append(html.Tr([html.Td("Surface"), html.Td(road_record["surface"] or "unknown")]))
-    if road_record.get("unra_station"):
-        info_rows.append(html.Tr([html.Td("Station"), html.Td(road_record["unra_station"])]))
-    if road_record.get("segment_count", 0) > 1:
-        info_rows.append(html.Tr([html.Td("Segments"), html.Td(f"{road_data['segment_count']}")]))
     # Enriched data rows (shown when enrichment pipeline has been run)
     if road_record.get("surface_predicted"):
         info_rows.append(html.Tr([html.Td("Predicted Surface"), html.Td(road_record["surface_predicted"])]))
@@ -866,17 +859,14 @@ def _build_segments_from_geometries(road_record: dict) -> list[dict]:
             _haversine_pair(coords[j], coords[j + 1])
             for j in range(len(coords) - 1)
         ) if len(coords) > 1 else 0.0
-        osm_ids = road_record.get("osm_ids", [])
         segments.append({
-            "osm_id": osm_ids[i] if i < len(osm_ids) else road_record.get("id", ""),
+            "osm_id": road_record["osm_ids"][i] if i < len(road_record["osm_ids"]) else "",
             "name": road_record["name"],
-            "highway_type": road_record.get("unra_class_raw") or road_record["highway_class"],
+            "highway_type": road_record["highway_class"],
             "surface": road_record["surface"] or "unknown",
-            "width": road_record.get("width") or "N/A",
-            "lanes": road_record.get("lanes") or "N/A",
-            "road_ref": road_record.get("road_ref", ""),
+            "width": road_record["width"] or "unknown",
+            "lanes": road_record["lanes"] or "unknown",
             "coordinates": coords,
-            "geometry": geom,
             "length_km": round(length, 3),
         })
     return segments
@@ -1546,25 +1536,83 @@ def show_video_cost_breakdown(video_data, current_step):
 
 # --- Input Validation Warnings ---
 
+
+def _render_validation_alerts(results: list[dict]) -> list:
+    """Render validation results as stacked dbc.Alert banners.
+
+    Args:
+        results: List of dicts with keys level ('warning'|'error'), code, message.
+
+    Returns:
+        List of dbc.Alert components (empty list if no results).
+    """
+    if not results:
+        return []
+    color_map = {"warning": "warning", "error": "danger"}
+    return [
+        dbc.Alert(
+            [html.Strong(f"[{r['code']}] "), r["message"]],
+            color=color_map.get(r["level"], "warning"),
+            className="py-2 mb-1",
+            style={"fontSize": "0.85rem"},
+            dismissable=True,
+        )
+        for r in results
+    ]
+
+
+@callback(
+    Output("condition-warnings", "children"),
+    Input("surface-type-select", "value"),
+    Input("iri-input", "value"),
+    prevent_initial_call=True,
+)
+def validate_condition_inputs(surface_type, iri):
+    """VALD-03: IRI vs surface type plausibility."""
+    from engine.validation import validate_iri_surface
+    results = validate_iri_surface(surface_type, iri)
+    if not results:
+        return html.Div()
+    return html.Div(_render_validation_alerts(results))
+
+
 @callback(
     Output("traffic-warnings", "children"),
     Input("total-adt-input", "value"),
+    Input("growth-rate-input", "value"),
+    State("road-data-store", "data"),
+    State("population-store", "data"),
+    prevent_initial_call=True,
 )
-def validate_traffic(adt):
-    """Show warnings for unusual traffic values."""
-    if not adt:
+def validate_traffic(adt, growth_rate_pct, road_data, pop_data):
+    """VALD-01, VALD-02, VALD-06 + migrated ADT range check."""
+    from engine.validation import (
+        validate_adt_range, validate_traffic_population,
+        validate_traffic_capacity, validate_growth_elasticity,
+    )
+    from config.parameters import SURFACE_TO_CAPACITY_KEY
+
+    all_results = []
+
+    # Migrated ADT range check (preserves existing behavior)
+    all_results.extend(validate_adt_range(adt))
+
+    # VALD-01: Traffic vs population
+    all_results.extend(validate_traffic_population(adt, pop_data))
+
+    # VALD-02: Traffic vs road capacity
+    surface = "two_lane_paved"  # default
+    if road_data:
+        osm_surface = (road_data.get("surface") or "").lower()
+        surface = SURFACE_TO_CAPACITY_KEY.get(osm_surface, "two_lane_paved")
+    all_results.extend(validate_traffic_capacity(adt, surface))
+
+    # VALD-06: Growth rate vs GDP elasticity
+    all_results.extend(validate_growth_elasticity(growth_rate_pct))
+
+    if not all_results:
         return html.Div()
-    warnings = []
-    if adt > 50000:
-        warnings.append("Traffic seems very high (>50,000 ADT) \u2014 please verify.")
-    elif adt < 10:
-        warnings.append("Traffic seems very low (<10 ADT) \u2014 please verify.")
-    if not warnings:
-        return html.Div()
-    return html.Div([
-        dbc.Alert(w, color="warning", className="py-1 mb-1", style={"fontSize": "0.85rem"})
-        for w in warnings
-    ])
+    return html.Div(_render_validation_alerts(all_results))
 
 
 @callback(
@@ -1573,35 +1621,43 @@ def validate_traffic(adt):
     Input("discount-rate-input", "value"),
     Input("analysis-period-input", "value"),
     State("road-data-store", "data"),
+    prevent_initial_call=True,
 )
 def validate_costs(total_cost, discount_rate_pct, analysis_period, road_data):
-    """Show warnings for unusual cost/parameter values."""
-    warnings = []
+    """VALD-04 + migrated discount rate and analysis period checks."""
+    from engine.validation import validate_cost_benchmarks
+
+    all_results = []
+
+    # Road length and type from store
     length = 10.0
-    if road_data and road_data.get("total_length_km"):
-        length = road_data["total_length_km"]
-    if total_cost and length > 0:
-        cost_per_km = total_cost / length
-        if cost_per_km < 50000:
-            warnings.append(f"Cost per km (${cost_per_km:,.0f}) seems very low for Uganda.")
-        elif cost_per_km > 2000000:
-            warnings.append(f"Cost per km (${cost_per_km:,.0f}) seems very high for Uganda.")
+    road_type = "gravel"
+    if road_data:
+        if road_data.get("total_length_km"):
+            length = road_data["total_length_km"]
+        osm_surface = (road_data.get("surface") or "").lower()
+        road_type = osm_surface or "gravel"
+
+    # VALD-04: Cost vs Uganda benchmarks
+    all_results.extend(validate_cost_benchmarks(total_cost, length, road_type))
+
+    # Preserve existing discount rate and analysis period checks (simple inline)
+    warnings_legacy = []
     if discount_rate_pct is not None:
         if discount_rate_pct < 6:
-            warnings.append("Discount rate below 6% is unusually low.")
+            warnings_legacy.append({"level": "warning", "code": "PARAM", "message": "Discount rate below 6% is unusually low."})
         elif discount_rate_pct > 18:
-            warnings.append("Discount rate above 18% is unusually high.")
+            warnings_legacy.append({"level": "warning", "code": "PARAM", "message": "Discount rate above 18% is unusually high."})
     if analysis_period is not None:
         if analysis_period > 30:
-            warnings.append("Analysis period over 30 years may reduce reliability.")
+            warnings_legacy.append({"level": "warning", "code": "PARAM", "message": "Analysis period over 30 years may reduce reliability."})
         elif analysis_period < 10:
-            warnings.append("Analysis period under 10 years is unusually short.")
-    if not warnings:
+            warnings_legacy.append({"level": "warning", "code": "PARAM", "message": "Analysis period under 10 years is unusually short."})
+    all_results.extend(warnings_legacy)
+
+    if not all_results:
         return html.Div()
-    return html.Div([
-        dbc.Alert(w, color="warning", className="py-1 mb-1", style={"fontSize": "0.85rem"})
-        for w in warnings
-    ])
+    return html.Div(_render_validation_alerts(all_results))
 
 
 # --- Step 5: Run CBA ---
@@ -1713,8 +1769,20 @@ def run_cba_callback(
             no_update, no_update, no_update, no_update, no_update,
         )
 
-    # Population integration deferred pending verified methodology.
+    # Population — prefer Kontur (local, fast) over WorldPop (API, slow)
     pop_data = None
+    try:
+        try:
+            from skills.kontur_population import get_population
+        except ImportError:
+            from skills.worldpop import get_population
+        if road_data and road_data.get("found"):
+            pop_data = get_population(
+                road_data.get("bbox", {}),
+                road_coords=road_data.get("coordinates_all"),
+            )
+    except Exception:
+        pass
 
     # Equity
     equity_results = None
@@ -1819,7 +1887,7 @@ def run_cba_callback(
     except Exception:
         pass
 
-    # Equity card with non-population inputs only
+    # Equity card with needs-based framing
     equity_ui = html.Div()
     if equity_results:
         eq_score = equity_results.get("overall_score", 0)
@@ -1831,61 +1899,47 @@ def run_cba_callback(
             eq_label = "Moderate \u2014 some gaps remain"
         else:
             eq_label = "Well-served \u2014 meets most user needs"
-
-        equity_children = [
+        equity_ui = dbc.Card(dbc.CardBody([
             html.H6("Equity Assessment"),
-            html.Small(
-                "Population-based equity metrics are deferred pending a verified Uganda population methodology.",
-                className="text-muted d-block mb-2",
-            ),
-        ]
-
-        # Row 1: Composite score bar
-        equity_children.extend([
             dbc.Progress(
                 value=eq_score,
                 label=f"{eq_score}/100",
                 color="success" if eq_score >= 60 else "warning",
-                className="mb-1", style={"height": "24px"},
+                className="mb-2", style={"height": "24px"},
             ),
-            html.Small(eq_label, className="text-muted d-block mb-2"),
-        ])
+            html.Small(eq_label, className="text-muted"),
+        ]), className="mb-3")
 
-        # Row 2: Sub-index breakdown
-        def _idx_color(v):
-            if v >= 70:
-                return "#2d5f4a"
-            elif v < 40:
-                return "#a83a2f"
-            return "#9a6b2f"
+    # Post-CBA validation (VALD-05, VALD-07)
+    from engine.validation import validate_eirr_reasonableness, validate_voc_proportionality
 
-        indices = [
-            ("Accessibility", equity_results.get("accessibility_index", 0), "70%"),
-            ("Facility Access", equity_results.get("facility_access_index", 0), "30%"),
-        ]
-        idx_rows = []
-        for name, val, weight in indices:
-            idx_rows.append(html.Div([
-                html.Span(name, style={"flex": "1", "fontSize": "0.8rem"}),
-                html.Span(f"{val}/100", style={
-                    "fontFamily": "'DM Mono', monospace", "fontWeight": "600",
-                    "color": _idx_color(val), "fontSize": "0.8rem", "width": "55px",
-                    "textAlign": "right",
-                }),
-                html.Span(weight, style={
-                    "fontSize": "0.72rem", "color": "#999", "width": "30px",
-                    "textAlign": "right",
-                }),
-            ], style={"display": "flex", "alignItems": "center", "gap": "6px", "padding": "2px 0"}))
+    post_cba_alerts = []
 
-        equity_children.append(html.Div(idx_rows, style={
-            "borderTop": "1px solid #dee2e6", "paddingTop": "6px",
-        }))
+    # VALD-07: EIRR reasonableness
+    eirr_pct = cba_results.get("summary", {}).get("eirr_pct")
+    post_cba_alerts.extend(_render_validation_alerts(validate_eirr_reasonableness(eirr_pct)))
 
-        equity_ui = dbc.Card(dbc.CardBody(equity_children), className="mb-3")
+    # VALD-05: VOC savings proportionality
+    iri_before = None
+    if condition_data and isinstance(condition_data, dict):
+        iri_before = condition_data.get("iri")
+    elif video_data and isinstance(video_data, dict):
+        iri_before = video_data.get("average_iri")
+    iri_after = 4.0 if (road_data or {}).get("surface", "").lower() in ("asphalt", "concrete", "paved") else 8.0
+    # voc_savings and total_benefits from first operation year (post-construction)
+    first_op_year = next(
+        (cf for cf in cba_results.get("yearly_cashflows", []) if not cf.get("is_construction")),
+        None,
+    )
+    voc_savings_yr = first_op_year["benefits"]["voc_savings"] if first_op_year else 0
+    total_benefits_yr = first_op_year["benefits"]["total"] if first_op_year else 0
+    voc_pct = voc_savings_yr / total_benefits_yr if total_benefits_yr > 0 else None
+    post_cba_alerts.extend(_render_validation_alerts(validate_voc_proportionality(iri_before, iri_after, voc_pct)))
 
-    left_result = html.Div([verdict_badge, metric_row])
-    right_panel = html.Div([metric_row, verdict_badge, equity_ui, charts_ui])
+    post_cba_div = html.Div(post_cba_alerts, className="mt-2") if post_cba_alerts else html.Div()
+
+    left_result = html.Div([verdict_badge, metric_row, post_cba_div])
+    right_panel = html.Div([metric_row, verdict_badge, post_cba_div, equity_ui, charts_ui])
 
     return (
         left_result,

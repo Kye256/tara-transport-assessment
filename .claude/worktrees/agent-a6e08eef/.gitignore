@@ -16,7 +16,6 @@ venv/
 .venv/
 
 # Data files (raw/large — only processed GeoJSON goes in repo)
-data/
 data/videos/
 !data/videos/*/cache/
 !data/videos/*/cache/*.json

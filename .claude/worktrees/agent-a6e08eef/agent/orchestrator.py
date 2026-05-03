@@ -19,6 +19,7 @@ MODEL = "claude-opus-4-6"
 TOOL_LABELS = {
     "search_road": "Searching for road on OpenStreetMap",
     "find_facilities": "Finding nearby facilities",
+    "get_population": "Getting population data from WorldPop",
     "forecast_traffic": "Forecasting traffic",
     "run_cba": "Running cost-benefit analysis",
     "run_sensitivity": "Running sensitivity analysis",
@@ -45,6 +46,8 @@ def _tool_input_summary(tool_name: str, tool_input: dict) -> str:
         country = tool_input.get("country", "")
         detail = f": {road}" + (f", {country}" if country else "")
     elif tool_name == "find_facilities":
+        detail = ""
+    elif tool_name == "get_population":
         detail = ""
     elif tool_name == "run_cba":
         parts = []
@@ -82,6 +85,7 @@ def create_agent() -> dict:
         "model": MODEL,
         "road_data": None,
         "facilities_data": None,
+        "population_data": None,
         "cba_results": None,
         "sensitivity_results": None,
         "equity_results": None,
@@ -177,6 +181,7 @@ def process_message_sync(
                     if tool_name == "generate_report":
                         tool_input["_road_data"] = agent_state.get("road_data")
                         tool_input["_facilities_data"] = agent_state.get("facilities_data")
+                        tool_input["_population_data"] = agent_state.get("population_data")
                         tool_input["_cba_results"] = agent_state.get("cba_results")
                         tool_input["_sensitivity_results"] = agent_state.get("sensitivity_results")
                         tool_input["_equity_results"] = agent_state.get("equity_results")
@@ -259,6 +264,9 @@ def _update_agent_state(agent_state: dict, tool_name: str, result: dict) -> None
 
     elif tool_name == "find_facilities" and "_facilities_data" in result:
         agent_state["facilities_data"] = result["_facilities_data"]
+
+    elif tool_name == "get_population" and "_population_data" in result:
+        agent_state["population_data"] = result["_population_data"]
 
     elif tool_name == "run_cba" and "_full_result" in result:
         agent_state["cba_results"] = result["_full_result"]

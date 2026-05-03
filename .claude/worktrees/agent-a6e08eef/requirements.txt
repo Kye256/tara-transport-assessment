@@ -1,0 +1,40 @@
+# TARA: Transport Assessment & Road Appraisal
+# Dependencies (pinned to tested versions)
+
+# Web UI (Dash)
+dash==4.0.0
+dash-bootstrap-components==2.0.4
+dash-leaflet==1.1.3
+dash-extensions==2.0.4
+
+# AI Agent
+anthropic==0.79.0
+
+# Data & Analysis
+numpy==2.4.2
+pandas==3.0.0
+scipy==1.17.0
+
+# Geospatial
+geopy==2.4.1
+rasterio==1.5.0
+
+# Charts
+plotly==6.5.2
+matplotlib==3.10.8
+kaleido==1.2.0
+
+# HTTP & APIs
+requests==2.32.5
+httpx==0.28.1
+
+# Video processing
+opencv-python-headless==4.13.0.92
+
+# Report generation
+fpdf2==2.8.5
+python-docx==1.2.0
+
+# Utilities
+python-dotenv==1.2.1
+Pillow==12.1.1

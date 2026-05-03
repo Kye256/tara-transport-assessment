@@ -72,7 +72,7 @@ def generate_report_markdown(
     sections.append(_section_sensitivity_analysis(sensitivity_results))
 
     # 7. Equity Assessment
-    sections.append(_section_equity_assessment(equity_results, population_data))
+    sections.append(_section_equity_assessment(equity_results))
 
     # 8. Road Condition (if dashcam data available)
     if condition_data and (condition_data.get("found") or condition_data.get("source") == "video_pipeline"):
@@ -90,12 +90,6 @@ def generate_report_markdown(
     sections.append("*Built with Claude Opus 4.6 | Anthropic Claude Code Hackathon 2026*")
 
     return "\n\n".join(sections)
-
-
-POPULATION_DEFERRED_NOTE = (
-    "Population analysis is not included in this release pending a verified Uganda "
-    "population methodology."
-)
 
 
 def generate_report_pdf(
@@ -336,7 +330,27 @@ def _section_road_description(road_data) -> str:
 
 def _section_corridor_context(population_data, facilities_data) -> str:
     lines = ["## 3. Corridor Context", ""]
-    lines.append(f"*{POPULATION_DEFERRED_NOTE}*")
+
+    if population_data and population_data.get("found"):
+        buffers = population_data.get("buffers", {})
+        buf_5km = buffers.get("5.0km", buffers.get("5km", {}))
+        lines.append("### Population")
+        lines.append("")
+        lines.append("| Buffer | Population | Density |")
+        lines.append("|--------|-----------|---------|")
+        for key, buf in buffers.items():
+            if buf and buf.get("population"):
+                lines.append(f"| {key} | {buf['population']:,} | {buf.get('density_per_km2', 0):,.0f}/km\u00b2 |")
+        lines.append("")
+        lines.append(f"**Classification:** {population_data.get('classification', 'unknown').title()}")
+
+        pov = population_data.get("poverty_estimate", {})
+        if pov.get("population_in_poverty"):
+            lines.append(f"")
+            lines.append(f"**Poverty estimate:** {pov['population_in_poverty']:,} people below poverty line "
+                         f"({pov.get('poverty_ratio', 0):.0%} headcount ratio)")
+    else:
+        lines.append("*Population data not available.*")
 
     lines.append("")
 
@@ -448,7 +462,7 @@ def _section_sensitivity_analysis(sensitivity_results) -> str:
     return "\n".join(lines)
 
 
-def _section_equity_assessment(equity_results, population_data=None) -> str:
+def _section_equity_assessment(equity_results) -> str:
     lines = ["## 7. Equity Assessment", ""]
     if not equity_results:
         lines.append("*Equity assessment not available.*")
@@ -458,16 +472,15 @@ def _section_equity_assessment(equity_results, population_data=None) -> str:
     lines.append("")
     lines.append("| Index | Score | Weight |")
     lines.append("|-------|-------|--------|")
-    lines.append(f"| Accessibility | {equity_results.get('accessibility_index', 'N/A')}/100 | 70% |")
-    lines.append(f"| Facility Access | {equity_results.get('facility_access_index', 'N/A')}/100 | 30% |")
+    lines.append(f"| Accessibility | {equity_results.get('accessibility_index', 'N/A')}/100 | 30% |")
+    lines.append(f"| Population Benefit | {equity_results.get('population_benefit_index', 'N/A')}/100 | 25% |")
+    lines.append(f"| Poverty Impact | {equity_results.get('poverty_impact_index', 'N/A')}/100 | 30% |")
+    lines.append(f"| Facility Access | {equity_results.get('facility_access_index', 'N/A')}/100 | 15% |")
 
     breakdown = equity_results.get("breakdown", {})
     if breakdown.get("time_saving_description"):
         lines.append("")
         lines.append(f"*{breakdown['time_saving_description']}*")
-
-    lines.append("")
-    lines.append(f"*{POPULATION_DEFERRED_NOTE}*")
 
     return "\n".join(lines)
 
@@ -585,7 +598,7 @@ def _section_recommendation(cba_results, sensitivity_results, equity_results) ->
         if equity_results and equity_results.get("overall_score", 0) >= 60:
             lines.append("")
             lines.append(f"The project scores **{equity_results['overall_score']}/100 on equity**, "
-                         f"based on accessibility and facility access indicators, indicating positive social impact that may justify investment "
+                         f"indicating significant positive social impact that may justify investment "
                          f"even with marginal economic returns.")
 
         lines.append("")
@@ -728,7 +741,22 @@ def _pdf_road_description(pdf, road_data, condition_data=None, video_data=None):
 
 
 def _pdf_corridor_context(pdf, population_data, facilities_data, video_data=None):
-    _pdf_paragraph(pdf, POPULATION_DEFERRED_NOTE)
+    if population_data and population_data.get("found"):
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 8, "Population", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+
+        buffers = population_data.get("buffers", {})
+        widths = [30, 40, 40]
+        _pdf_table_row(pdf, ["Buffer", "Population", "Density"], widths, bold=True)
+        for key, buf in buffers.items():
+            if buf and buf.get("population"):
+                _pdf_table_row(pdf, [key, f"{buf['population']:,}", f"{buf.get('density_per_km2', 0):,.0f}/km2"], widths)
+
+        pdf.cell(0, 3, "", ln=True)
+        _pdf_paragraph(pdf, f"Classification: {population_data.get('classification', 'unknown').title()}")
+    else:
+        _pdf_paragraph(pdf, "Population data not available for this corridor.")
 
     if facilities_data and facilities_data.get("total_count", 0) > 0:
         pdf.set_font("Helvetica", "B", 11)
@@ -926,10 +954,11 @@ def _pdf_equity_assessment(pdf, equity_results, equity_narrative: str = ""):
 
     widths = [55, 30, 25]
     _pdf_table_row(pdf, ["Index", "Score", "Weight"], widths, bold=True)
-    _pdf_table_row(pdf, ["Accessibility", f"{equity_results.get('accessibility_index', 'N/A')}/100", "70%"], widths)
-    _pdf_table_row(pdf, ["Facility Access", f"{equity_results.get('facility_access_index', 'N/A')}/100", "30%"], widths)
+    _pdf_table_row(pdf, ["Accessibility", f"{equity_results.get('accessibility_index', 'N/A')}/100", "30%"], widths)
+    _pdf_table_row(pdf, ["Population Benefit", f"{equity_results.get('population_benefit_index', 'N/A')}/100", "25%"], widths)
+    _pdf_table_row(pdf, ["Poverty Impact", f"{equity_results.get('poverty_impact_index', 'N/A')}/100", "30%"], widths)
+    _pdf_table_row(pdf, ["Facility Access", f"{equity_results.get('facility_access_index', 'N/A')}/100", "15%"], widths)
     pdf.cell(0, 5, "", ln=True)
-    _pdf_paragraph(pdf, POPULATION_DEFERRED_NOTE)
 
     # Equity narrative
     if equity_narrative:
@@ -1075,7 +1104,7 @@ def _pdf_risk_recommendation(pdf, cba_results, sensitivity_results, equity_resul
         if equity_results and equity_results.get("overall_score", 0) >= 60:
             _pdf_paragraph(pdf,
                 f"Equity score of {equity_results['overall_score']}/100 indicates significant "
-                f"positive social impact based on accessibility and facility access indicators.")
+                f"positive social impact.")
 
     _pdf_paragraph(pdf, "Next steps: (1) Commission traffic survey, (2) Detailed engineering design, "
                         "(3) HDM-4 feasibility study, (4) Submit to UNRA pipeline.")
